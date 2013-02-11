@@ -90,12 +90,15 @@ class svnfs(Fuse):
         st.st_uid = 0
         st.st_gid = 0
 
+        # TODO
         created_rev = fs.node_created_rev(self.root, path, self.taskpool)
         date = fs.revision_prop(self.fs_ptr, created_rev,
                                 core.SVN_PROP_REVISION_DATE, self.taskpool)
-        st.st_mtime = 0
-        st.st_ctime = 0
-        st.st_atime = 0
+        time = core.secs_from_timestr(date, self.taskpool)
+        st.st_mtime = time
+        st.st_ctime = time
+        st.st_atime = time
+        
         if kind == core.svn_node_dir:
             st.st_mode = S_IFDIR | 0555
             st.st_size = 512
