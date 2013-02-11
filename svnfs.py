@@ -82,8 +82,10 @@ class svnfs(Fuse):
             e.errno = ENOENT;
             raise e
 
+        # TODO: CRC of some id?
         st.st_ino = fs.unparse_id(fs.node_id(self.root, path, self.taskpool), self.taskpool)
-        st.st_ino = binascii.crc32(st.st_ino)
+        st.st_ino = abs(binascii.crc32(st.st_ino))
+        
         st.st_size = 0
         st.st_dev = 0
         st.st_nlink = 1
