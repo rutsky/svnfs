@@ -1,4 +1,4 @@
-#!/usr/bin/python2.3
+#!/usr/bin/env python
 #
 #  Copyright (C) 2001  Jeff Epler  <jepler@unpythonic.dhs.org>
 #  Copyright (C) 2005  Daniel Patterson  <danpat@danpat.net>
@@ -27,6 +27,8 @@
 #          - run "svnfs.py /mnt/wherever" or "fusermount /mnt/wherever ./svnfs.py"
 #          - run "fusermount -u /mnt/wherever" to unmount
 
+import fuse
+fuse.fuse_python_api = (0, 2)
 from fuse import Fuse
 import os
 from errno import *
@@ -38,13 +40,17 @@ import binascii
 from svn import fs, core, repos
 
 import thread
+
+
 class svnfs(Fuse):
 
-    repospath = "/home/danpat/repos"
+    repospath = "/srv/svn/repos/data"
 
     def __init__(self, pool, *args, **kw):
-    
-        Fuse.__init__(self, *args, **kw)
+        usage = 'svnfs ' + fuse.Fuse.fusage
+        Fuse.__init__(self, version="%prog " + fuse.__version__, usage=usage, dash_s_do='setsingle')
+        
+        self.parse(errex=1)
     
         self.pool = pool
         self.taskpool = core.svn_pool_create(pool)
@@ -52,8 +58,8 @@ class svnfs(Fuse):
         self.rev = fs.youngest_rev(self.fs_ptr, pool)
         self.root = fs.revision_root(self.fs_ptr, self.rev, pool)
         
-	self.multithreaded = 1;
-	self.main()
+        self.multithreaded = 1
+        self.main()
 
     def mythread(self):
         """
@@ -68,46 +74,36 @@ class svnfs(Fuse):
     flags = 1
     
     def getattr(self, path):
-        mode = 0444
-        size = 0
+        st = fuse.Stat()
 
         kind = fs.check_path(self.root, path, self.taskpool)
         if kind == core.svn_node_none:
-          e = OSError("Nothing found at %s " % path);
-          e.errno = ENOENT;
-          raise e
-        elif kind == core.svn_node_dir:
-          mode = mode | 0111
-          mode = mode | 0040000
-          size = 512
-        else:
-          mode = mode | 0100000
-          size = fs.file_length(self.root, path, self.taskpool)          
+            e = OSError("Nothing found at %s " % path);
+            e.errno = ENOENT;
+            raise e
 
-        inode = fs.unparse_id(fs.node_id(self.root, path, self.taskpool), self.taskpool)
-        inode = binascii.crc32(inode) 
-        size = 0
-        dev = 0
-        nlink = 1
-        uid = 0
-        gid = 0
+        st.st_ino = fs.unparse_id(fs.node_id(self.root, path, self.taskpool), self.taskpool)
+        st.st_ino = binascii.crc32(st.st_ino)
+        st.st_size = 0
+        st.st_dev = 0
+        st.st_nlink = 1
+        st.st_uid = 0
+        st.st_gid = 0
 
         created_rev = fs.node_created_rev(self.root, path, self.taskpool)
-        date = fs.revision_prop(self.fs_ptr, created_rev, 
+        date = fs.revision_prop(self.fs_ptr, created_rev,
                                 core.SVN_PROP_REVISION_DATE, self.taskpool)
-        mtime = 0
-        ctime = 0
-        atime = 0
-        kind = fs.check_path(self.root, path, self.taskpool)
+        st.st_mtime = 0
+        st.st_ctime = 0
+        st.st_atime = 0
         if kind == core.svn_node_dir:
-          mode = mode | 0111
-          mode = mode | 0040000
-          size = 512
+            st.st_mode = S_IFDIR | 0555
+            st.st_size = 512
         else:
-          mode = mode | 0100000
-          size = fs.file_length(self.root, path, self.taskpool)          
+            st.st_mode = S_IFREG | 0444
+            st.st_size = fs.file_length(self.root, path, self.taskpool)
 
-        return (mode, inode, dev, nlink, uid, gid, size, atime, mtime, ctime)
+        return st
 
 
     # TODO: support this
@@ -116,9 +112,17 @@ class svnfs(Fuse):
         e.errno = ENOENT;
         raise e
 
+    def __get_files_list(self, path):
+        # TODO: check that directory exists first?
+        return fs.dir_entries(self.root, path, self.taskpool).keys()
+
     def getdir(self, path):
-        entries = fs.dir_entries(self.root, path, self.taskpool)
-    	return map(lambda x: (x,0), entries.keys())
+        return map(lambda x: (x, 0), self.__get_files_list(path))
+
+    def readdir(self, path, offset):
+        # TODO: offset?
+        for f in  self.__get_files_list(path) + [".", ".."]:
+            yield fuse.Direntry(f)
 
     def unlink(self, path):
         e = OSError("Read-only view, can't unlink %s " % path);
@@ -171,7 +175,7 @@ class svnfs(Fuse):
         raise e
 
     def utime(self, path, times):
-    	return os.utime(path, times)
+        return os.utime(path, times)
 
     def open(self, path, flags):
         if ((flags & os.O_WRONLY) or (flags & os.O_RDWR) or (flags & os.O_APPEND) or \
@@ -201,18 +205,20 @@ class svnfs(Fuse):
         return 0
 
     def statfs(self):
-        blocks_size = 1024
-        blocks = 0
-        blocks_free = 0
-        files = 0
-        files_free = 0
-        namelen = 80
-        return (blocks_size, blocks, blocks_free, files, files_free, namelen)
+        st = fuse.StatVfs()
+        
+        st.f_bsize = 1024
+        st.f_blocks = 0
+        st.f_bfree = 0
+        st.f_files = 0
+        st.f_ffree = 0
+        st.f_namelen = 80
+        
+        return st
 
     def fsync(self, path, isfsyncfile):
         return 0
-    
-if __name__ == '__main__':
 
-        core.run_app(svnfs, sys.argv)
+if __name__ == '__main__':
+    core.run_app(svnfs, sys.argv)
 
