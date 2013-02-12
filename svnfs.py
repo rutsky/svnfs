@@ -60,18 +60,6 @@ class svnfs(Fuse):
         
         self.main()
 
-    def mythread(self):
-        """
-        The beauty of the FUSE python implementation is that with the python interp
-        running in foreground, you can have threads
-        """    
-        print "mythread: started"
-        #while 1:
-        #    time.sleep(120)
-        #    print "mythread: ticking"
-    
-    flags = 1
-    
     def getattr(self, path):
         st = fuse.Stat()
 
