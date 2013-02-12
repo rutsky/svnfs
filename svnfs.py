@@ -77,7 +77,7 @@ class svnfs(Fuse):
 
         kind = fs.check_path(self.root, path, self.taskpool)
         if kind == core.svn_node_none:
-            e = OSError("Nothing found at %s " % path);
+            e = OSError("Nothing found at %s " % path)
             e.errno = ENOENT;
             raise e
 
@@ -184,17 +184,17 @@ class svnfs(Fuse):
     def open(self, path, flags):
         if ((flags & os.O_WRONLY) or (flags & os.O_RDWR) or (flags & os.O_APPEND) or \
            (flags & os.O_CREAT) or (flags & os.O_TRUNC) or (flags & os.O_TRUNC)):
-          e = OSError("Read-only view, can't create %s " % path);
-          e.errno = EROFS;
-          raise e
+            e = OSError("Read-only view, can't create %s " % path);
+            e.errno = EROFS;
+            raise e
         return 0
     
     def read(self, path, len, offset):
         kind = fs.check_path(self.root, path, self.taskpool)
         if kind != core.svn_node_file:
-          e = OSError("Can't read a non-file %s" % path)
-          e.errno = ENOENT;
-          raise e
+            e = OSError("Can't read a non-file %s" % path)
+            e.errno = ENOENT;
+            raise e
 
         stream = fs.file_contents(self.root, path, self.taskpool)
         core.svn_stream_read(stream, int(offset))
@@ -225,4 +225,3 @@ class svnfs(Fuse):
 
 if __name__ == '__main__':
     core.run_app(svnfs, sys.argv)
-
