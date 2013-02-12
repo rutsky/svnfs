@@ -52,8 +52,10 @@ class svnfs(Fuse):
         
         self.parse(errex=1)
     
-        self.pool = pool
-        self.taskpool = core.svn_pool_create(pool)
+        self.pool = pool = None # Using pools in current implementation leads to race conditions
+        #self.taskpool = core.svn_pool_create(pool)
+        self.taskpool = None
+        
         self.fs_ptr = repos.svn_repos_fs(repos.svn_repos_open(svnfs.repospath, pool))
         self.rev = fs.youngest_rev(self.fs_ptr, pool)
         self.root = fs.revision_root(self.fs_ptr, self.rev, pool)
