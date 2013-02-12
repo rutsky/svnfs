@@ -214,13 +214,14 @@ def run_svnfs(pool, *args, **kwargs):
     
     fs.parse(values=fs, errex=1)
     
-    if len(fs.cmdline[1]) == 0:
-        sys.stderr.write("Error: Subversion repository directory not specified\n")
-        sys.exit(1)
-    elif len(fs.cmdline[1]) > 1:
-        sys.stderr.write("Error: Too much positional arguments\n")
-        sys.exit(1)
-    
+    if fs.parser.fuse_args.mount_expected():
+        if len(fs.cmdline[1]) == 0:
+            sys.stderr.write("Error: Subversion repository directory not specified\n")
+            sys.exit(1)
+        elif len(fs.cmdline[1]) > 1:
+            sys.stderr.write("Error: Too much positional arguments\n")
+            sys.exit(1)
+
     try:
         fs.main()
     except fuse.FuseError as s:
