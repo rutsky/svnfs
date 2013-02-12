@@ -58,7 +58,6 @@ class svnfs(Fuse):
         self.rev = fs.youngest_rev(self.fs_ptr, pool)
         self.root = fs.revision_root(self.fs_ptr, self.rev, pool)
         
-        self.multithreaded = 1
         self.main()
 
     def mythread(self):
