@@ -76,7 +76,6 @@ class SvnFS(Fuse):
         st.st_uid = 0
         st.st_gid = 0
 
-        # TODO
         created_rev = fs.node_created_rev(self.root, path, self.taskpool)
         date = fs.revision_prop(self.fs_ptr, created_rev,
                                 core.SVN_PROP_REVISION_DATE, self.taskpool)
@@ -93,7 +92,6 @@ class SvnFS(Fuse):
             st.st_size = fs.file_length(self.root, path, self.taskpool)
 
         return st
-
 
     # TODO: support this
     def readlink(self, path):
