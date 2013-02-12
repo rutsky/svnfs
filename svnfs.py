@@ -209,7 +209,7 @@ class SvnFS(Fuse):
         return 0
 
 def run_svnfs(pool, *args, **kwargs):
-    usage = "Usage: %prog svn_repository_dir mountpoint"
+    usage = "Usage: %prog svn_repository_dir mountpoint [options]"
     fs = SvnFS(version="%prog " + fuse.__version__, dash_s_do='setsingle', usage=usage)
     
     fs.parse(values=fs, errex=1)
