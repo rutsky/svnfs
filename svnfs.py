@@ -43,25 +43,19 @@ from svn import fs, core, repos
 import thread
 
 
-class svnfs(Fuse):
-
-    repospath = "/srv/svn/repos/data"
-
-    def __init__(self, pool, *args, **kw):
-        usage = 'svnfs ' + fuse.Fuse.fusage
-        Fuse.__init__(self, version="%prog " + fuse.__version__, usage=usage, dash_s_do='setsingle')
+class SvnFS(Fuse):
+    def __init__(self, *args, **kw):
+        Fuse.__init__(self, *args, **kw)
         
-        self.parse(errex=1)
-    
-        self.pool = pool = None # Using pools in current implementation leads to race conditions
-        #self.taskpool = core.svn_pool_create(pool)
-        self.taskpool = None
+    def fsinit(self):
+        (options, args) = self.cmdline
+        (repospath,) = args
         
-        self.fs_ptr = repos.svn_repos_fs(repos.svn_repos_open(svnfs.repospath, pool))
-        self.rev = fs.youngest_rev(self.fs_ptr, pool)
-        self.root = fs.revision_root(self.fs_ptr, self.rev, pool)
+        self.fs_ptr = repos.svn_repos_fs(repos.svn_repos_open(core.svn_dirent_canonicalize(repospath)))
+        self.rev = fs.youngest_rev(self.fs_ptr)
+        self.root = fs.revision_root(self.fs_ptr, self.rev)
         
-        self.main()
+        self.pool = self.taskpool = None
 
     def getattr(self, path):
         st = fuse.Stat()
@@ -214,5 +208,23 @@ class svnfs(Fuse):
     def fsync(self, path, isfsyncfile):
         return 0
 
+def run_svnfs(pool, *args, **kwargs):
+    usage = "Usage: %prog svn_repository_dir mountpoint"
+    fs = SvnFS(version="%prog " + fuse.__version__, dash_s_do='setsingle', usage=usage)
+    
+    fs.parse(values=fs, errex=1)
+    
+    if len(fs.cmdline[1]) == 0:
+        sys.stderr.write("Error: Subversion repository directory not specified\n")
+        sys.exit(1)
+    elif len(fs.cmdline[1]) > 1:
+        sys.stderr.write("Error: Too much positional arguments\n")
+        sys.exit(1)
+    
+    try:
+        fs.main()
+    except fuse.FuseError as s:
+        sys.stderr.write("Fuse failed: {0}\n".format(str(s)))
+
 if __name__ == '__main__':
-    core.run_app(svnfs, sys.argv)
+    core.run_app(run_svnfs, sys.argv)
