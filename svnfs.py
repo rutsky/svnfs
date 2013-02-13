@@ -74,6 +74,17 @@ class SvnFS(Fuse):
         # TODO
         self.pool = self.taskpool = None
         
+        # revision -> time
+        self.revision_creation_time_cache = {}
+    
+    def __revision_creation_time_impl(self, rev):
+        date = svn.fs.revision_prop(self.fs_ptr, rev,
+            svn.core.SVN_PROP_REVISION_DATE, self.taskpool)
+        return svn.core.secs_from_timestr(date, self.taskpool)
+
+    def __revision_creation_time(self, rev):
+        return self.revision_creation_time_cache.setdefault(rev, self.__revision_creation_time_impl(rev))
+    
     def __get_root(self, rev):
         return self.roots.setdefault(rev, svn.fs.revision_root(self.fs_ptr, rev))
 
@@ -96,11 +107,9 @@ class SvnFS(Fuse):
         st.st_uid = 0
         st.st_gid = 0
 
-        created_rev = svn.fs.node_created_rev(root, path, self.taskpool)
-        date = svn.fs.revision_prop(self.fs_ptr, created_rev,
-                                svn.core.SVN_PROP_REVISION_DATE, self.taskpool)
         # TODO: this is modification time, not creation or access
-        time = svn.core.secs_from_timestr(date, self.taskpool)
+        created_rev = svn.fs.node_created_rev(root, path, self.taskpool)
+        time = self.__revision_creation_time(created_rev)
         st.st_mtime = time
         st.st_ctime = time
         st.st_atime = time
@@ -127,9 +136,7 @@ class SvnFS(Fuse):
         st.st_uid = 0
         st.st_gid = 0
 
-        date = svn.fs.revision_prop(self.fs_ptr, rev,
-            svn.core.SVN_PROP_REVISION_DATE, self.taskpool)
-        time = svn.core.secs_from_timestr(date, self.taskpool)
+        time = self.__revision_creation_time(rev)
         st.st_mtime = time
         st.st_ctime = time
         st.st_atime = time
@@ -146,13 +153,11 @@ class SvnFS(Fuse):
         
         st.st_size = 0
         st.st_dev = 0
-        st.st_nlink = rev + 1
+        st.st_nlink = 1
         st.st_uid = 0
         st.st_gid = 0
 
-        date = svn.fs.revision_prop(self.fs_ptr, rev,
-            svn.core.SVN_PROP_REVISION_DATE, self.taskpool)
-        time = svn.core.secs_from_timestr(date, self.taskpool)
+        time = self.__revision_creation_time(rev)
         st.st_mtime = time
         st.st_ctime = time
         st.st_atime = time
