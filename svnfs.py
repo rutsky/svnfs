@@ -62,7 +62,7 @@ class SvnFS(Fuse):
     def init_repo(self):
         assert self.repospath is not None
     
-        self.fs_ptr = svn.repos.svn_repos_fs(svn.repos.svn_repos_open(svn.core.svn_dirent_canonicalize(self.repospath)))
+        self.fs_ptr = svn.repos.svn_repos_fs(svn.repos.svn_repos_open(svn.core.svn_path_canonicalize(self.repospath)))
         
         if self.revision == 'all':
             # revision -> revision_root object
