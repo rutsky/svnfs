@@ -24,7 +24,8 @@
 #
 #  USAGE:  - install and load the "fuse" kernel module 
 #            (tested with Linux 2.6.10, Fuse 2.2.1)
-#          - run "svnfs.py /var/lib/svn/repos/data /mnt/wherever"
+#          - run "svnfs.py /mnt/wherever -o svnrepo=/var/lib/svn/repodir" or
+#            "svnfs.py /var/lib/svn/repodir /mnt/wherever"
 #          - run "fusermount -u /mnt/wherever" to unmount
 
 import os
@@ -51,8 +52,12 @@ class SvnFS(Fuse):
     def __init__(self, *args, **kw):
         Fuse.__init__(self, *args, **kw)
         
-    def init_repo(self, repospath):
-        self.fs_ptr = svn.repos.svn_repos_fs(svn.repos.svn_repos_open(svn.core.svn_dirent_canonicalize(repospath)))
+        self.repospath = None
+        
+    def init_repo(self):
+        assert self.repospath is not None
+    
+        self.fs_ptr = svn.repos.svn_repos_fs(svn.repos.svn_repos_open(svn.core.svn_dirent_canonicalize(self.repospath)))
         self.rev = svn.fs.youngest_rev(self.fs_ptr)
         self.root = svn.fs.revision_root(self.fs_ptr, self.rev)
         
@@ -210,30 +215,41 @@ class SvnFS(Fuse):
         return 0
 
 if __name__ == '__main__':
-    usage = "Usage: %prog svn_repository_dir mountpoint [options]"
+    usage = ("Usage: %prog svn_repository_dir mountpoint [options]\n"
+             "    or\n"
+             "       %prog mountpoint -o svnrepo=SVN-REPO-DIR [options]\n")
     svnfs = SvnFS(version="%prog " + fuse.__version__, dash_s_do='setsingle', usage=usage)
     
-    # TODO: handle Subversion path as -o option --- I think this is how it should be done,
-    # otherwise it is impossible to mount filesystem as 
-    #   fusermount /mnt/... svnfs.py
+    svnfs.parser.add_option(mountopt="svnrepo", dest="repospath", metavar="SVN-REPO-DIR",
+        help="path to subversion reposiotory")
     
     svnfs.parse(values=svnfs, errex=1)
     
     if svnfs.parser.fuse_args.mount_expected():
-        if len(svnfs.cmdline[1]) == 0:
-            sys.stderr.write("Error: Subversion repository directory not specified\n")
-            sys.exit(1)
-        elif len(svnfs.cmdline[1]) > 1:
+        if len(svnfs.cmdline[1]) > 1:
             sys.stderr.write("Error: Too much positional arguments\n")
             sys.exit(1)
+        elif len(svnfs.cmdline[1]) == 1:
+            if svnfs.repospath:
+                sys.stderr.write("Error: Subversion repository directory specified multiple times.\n")
+                sys.exit(1)
+            svnfs.repospath = svnfs.cmdline[1][0]
+    
+        if not svnfs.repospath:
+            sys.stderr.write(
+                "Error: Subversion repository directory is required option, please specify it\n"
+                "using '-o svnrepo=/var/lib/svn/path-to-repository' option.\n")
+            sys.exit(1)
         else:
-            repopath = os.path.abspath(svnfs.cmdline[1][0])
+            svnfs.repospath = os.path.abspath(svnfs.repospath)
         
             # When FUSE daemonizes it changes CWD to root, do it manually.
             os.chdir("/")
 
+            # Open subversion repository before going to FUSE main loop, to handle obvious
+            # repository access errors.
             try:
-                svnfs.init_repo(repopath)
+                svnfs.init_repo()
             except svn.core.SubversionException as e:
                 sys.stderr.write("Subversion repository opening failed: {0}\n".format(str(e)))
                 sys.exit(1)
