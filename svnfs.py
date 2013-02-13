@@ -12,7 +12,7 @@
 #  This is a FUSE module using the Python bindings.  It allows you to mount
 #  a local subversion repository filesystem into the host filesystem, read-only.
 #  
-#  TODO: - support mtime and ctime
+#  TODO: - support ctime and ctime
 #        - support symlinks
 #        - more efficient reading of files (maybe a cache?)
 #        - support following HEAD as it moves, or pegging to a revision
@@ -22,30 +22,29 @@
 #        - mount arbitary sub-trees within the repository
 #        - work out a better way to represent inodes than binascii.crc32()
 #
-#  USAGE:  - modify "repospath" below
-#          - install and load the "fuse" kernel module 
+#  USAGE:  - install and load the "fuse" kernel module 
 #            (tested with Linux 2.6.10, Fuse 2.2.1)
-#          - run "svnfs.py /mnt/wherever" or "fusermount /mnt/wherever ./svnfs.py"
+#          - run "svnfs.py /var/lib/svn/repos/data /mnt/wherever"
 #          - run "fusermount -u /mnt/wherever" to unmount
+
+import os
+import sys
+import binascii
+from errno import *
+from stat import *
+
+# Import threading modules. TODO: Otherwise program prints on exit:
+# Exception KeyError: KeyError(139848519223040,) in <module 'threading' from '/usr/lib64/python2.7/threading.pyc'> ignored
+import threading
 
 import fuse
 fuse.fuse_python_api = (0, 2)
 from fuse import Fuse
-import os
-from errno import *
-from stat import *
-import sys
-import string
-import binascii
 
 import svn
 import svn.repos
 import svn.fs
 import svn.core
-
-# Import threading modules. TODO: Otherwise program prints on exit:
-# Exception KeyError: KeyError(139848519223040,) in <module 'threading' from '/usr/lib64/python2.7/threading.pyc'> ignored
-import threading
 
 
 class SvnFS(Fuse):
@@ -213,6 +212,10 @@ class SvnFS(Fuse):
 if __name__ == '__main__':
     usage = "Usage: %prog svn_repository_dir mountpoint [options]"
     svnfs = SvnFS(version="%prog " + fuse.__version__, dash_s_do='setsingle', usage=usage)
+    
+    # TODO: handle Subversion path as -o option --- I think this is how it should be done,
+    # otherwise it is impossible to mount filesystem as 
+    #   fusermount /mnt/... svnfs.py
     
     svnfs.parse(values=svnfs, errex=1)
     
