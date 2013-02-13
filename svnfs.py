@@ -229,9 +229,14 @@ if __name__ == '__main__':
             # When FUSE daemonizes it changes CWD to root, do it manually.
             os.chdir("/")
 
-            svnfs.init_repo(repopath)
+            try:
+                svnfs.init_repo(repopath)
+            except svn.core.SubversionException as e:
+                sys.stderr.write("Subversion repository opening failed: {0}\n".format(str(e)))
+                sys.exit(1)
 
     try:
         svnfs.main()
-    except fuse.FuseError as s:
-        sys.stderr.write("Fuse failed: {0}\n".format(str(s)))
+    except fuse.FuseError as e:
+        sys.stderr.write("Fuse failed: {0}\n".format(str(e)))
+        sys.exit(1)
