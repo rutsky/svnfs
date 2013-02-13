@@ -38,36 +38,39 @@ import sys
 import string
 import binascii
 
-from svn import fs, core, repos
+import svn
+import svn.repos
+import svn.fs
+import svn.core
 
-import thread
+# Import threading modules. TODO: Otherwise program prints on exit:
+# Exception KeyError: KeyError(139848519223040,) in <module 'threading' from '/usr/lib64/python2.7/threading.pyc'> ignored
+import threading
 
 
 class SvnFS(Fuse):
     def __init__(self, *args, **kw):
         Fuse.__init__(self, *args, **kw)
         
-    def fsinit(self):
-        (options, args) = self.cmdline
-        (repospath,) = args
+    def init_repo(self, repospath):
+        self.fs_ptr = svn.repos.svn_repos_fs(svn.repos.svn_repos_open(svn.core.svn_dirent_canonicalize(repospath)))
+        self.rev = svn.fs.youngest_rev(self.fs_ptr)
+        self.root = svn.fs.revision_root(self.fs_ptr, self.rev)
         
-        self.fs_ptr = repos.svn_repos_fs(repos.svn_repos_open(core.svn_dirent_canonicalize(repospath)))
-        self.rev = fs.youngest_rev(self.fs_ptr)
-        self.root = fs.revision_root(self.fs_ptr, self.rev)
-        
+        # TODO
         self.pool = self.taskpool = None
 
     def getattr(self, path):
         st = fuse.Stat()
 
-        kind = fs.check_path(self.root, path, self.taskpool)
-        if kind == core.svn_node_none:
+        kind = svn.fs.check_path(self.root, path, self.taskpool)
+        if kind == svn.core.svn_node_none:
             e = OSError("Nothing found at %s " % path)
             e.errno = ENOENT;
             raise e
 
         # TODO: CRC of some id?
-        st.st_ino = fs.unparse_id(fs.node_id(self.root, path, self.taskpool), self.taskpool)
+        st.st_ino = svn.fs.unparse_id(svn.fs.node_id(self.root, path, self.taskpool), self.taskpool)
         st.st_ino = abs(binascii.crc32(st.st_ino))
         
         st.st_size = 0
@@ -76,20 +79,21 @@ class SvnFS(Fuse):
         st.st_uid = 0
         st.st_gid = 0
 
-        created_rev = fs.node_created_rev(self.root, path, self.taskpool)
-        date = fs.revision_prop(self.fs_ptr, created_rev,
-                                core.SVN_PROP_REVISION_DATE, self.taskpool)
-        time = core.secs_from_timestr(date, self.taskpool)
+        created_rev = svn.fs.node_created_rev(self.root, path, self.taskpool)
+        date = svn.fs.revision_prop(self.fs_ptr, created_rev,
+                                svn.core.SVN_PROP_REVISION_DATE, self.taskpool)
+        # TODO: this is modification time, not creation or access
+        time = svn.core.secs_from_timestr(date, self.taskpool)
         st.st_mtime = time
         st.st_ctime = time
         st.st_atime = time
         
-        if kind == core.svn_node_dir:
+        if kind == svn.core.svn_node_dir:
             st.st_mode = S_IFDIR | 0555
             st.st_size = 512
         else:
             st.st_mode = S_IFREG | 0444
-            st.st_size = fs.file_length(self.root, path, self.taskpool)
+            st.st_size = svn.fs.file_length(self.root, path, self.taskpool)
 
         return st
 
@@ -101,7 +105,7 @@ class SvnFS(Fuse):
 
     def __get_files_list(self, path):
         # TODO: check that directory exists first?
-        return fs.dir_entries(self.root, path, self.taskpool).keys()
+        return svn.fs.dir_entries(self.root, path, self.taskpool).keys()
 
     def getdir(self, path):
         return map(lambda x: (x, 0), self.__get_files_list(path))
@@ -173,15 +177,15 @@ class SvnFS(Fuse):
         return 0
     
     def read(self, path, len, offset):
-        kind = fs.check_path(self.root, path, self.taskpool)
-        if kind != core.svn_node_file:
+        kind = svn.fs.check_path(self.root, path, self.taskpool)
+        if kind != svn.core.svn_node_file:
             e = OSError("Can't read a non-file %s" % path)
             e.errno = ENOENT;
             raise e
 
-        stream = fs.file_contents(self.root, path, self.taskpool)
-        core.svn_stream_read(stream, int(offset))
-        return core.svn_stream_read(stream, len)
+        stream = svn.fs.file_contents(self.root, path, self.taskpool)
+        svn.core.svn_stream_read(stream, int(offset))
+        return svn.core.svn_stream_read(stream, len)
     
     def write(self, path, buf, off):
         e = OSError("Read-only view, can't mkdir %s " % path);
@@ -206,24 +210,28 @@ class SvnFS(Fuse):
     def fsync(self, path, isfsyncfile):
         return 0
 
-def run_svnfs(pool, *args, **kwargs):
+if __name__ == '__main__':
     usage = "Usage: %prog svn_repository_dir mountpoint [options]"
-    fs = SvnFS(version="%prog " + fuse.__version__, dash_s_do='setsingle', usage=usage)
+    svnfs = SvnFS(version="%prog " + fuse.__version__, dash_s_do='setsingle', usage=usage)
     
-    fs.parse(values=fs, errex=1)
+    svnfs.parse(values=svnfs, errex=1)
     
-    if fs.parser.fuse_args.mount_expected():
-        if len(fs.cmdline[1]) == 0:
+    if svnfs.parser.fuse_args.mount_expected():
+        if len(svnfs.cmdline[1]) == 0:
             sys.stderr.write("Error: Subversion repository directory not specified\n")
             sys.exit(1)
-        elif len(fs.cmdline[1]) > 1:
+        elif len(svnfs.cmdline[1]) > 1:
             sys.stderr.write("Error: Too much positional arguments\n")
             sys.exit(1)
+        else:
+            repopath = os.path.abspath(svnfs.cmdline[1][0])
+        
+            # When FUSE daemonizes it changes CWD to root, do it manually.
+            os.chdir("/")
+
+            svnfs.init_repo(repopath)
 
     try:
-        fs.main()
+        svnfs.main()
     except fuse.FuseError as s:
         sys.stderr.write("Fuse failed: {0}\n".format(str(s)))
-
-if __name__ == '__main__':
-    core.run_app(run_svnfs, sys.argv)
