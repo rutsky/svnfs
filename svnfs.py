@@ -278,6 +278,7 @@ class SvnFS(Fuse):
         return os.utime(path, times)
 
     def open(self, path, flags):
+        # TODO: check existance?
         if ((flags & os.O_WRONLY) or (flags & os.O_RDWR) or (flags & os.O_APPEND) or \
            (flags & os.O_CREAT) or (flags & os.O_TRUNC) or (flags & os.O_TRUNC)):
             e = OSError("Read-only view, can't create %s " % path)
@@ -285,19 +286,28 @@ class SvnFS(Fuse):
             raise e
         return 0
     
-    def __read_svn(self, path, len, offset):
-        kind = svn.fs.check_path(self.root, path, self.taskpool)
+    def __read_svn(self, root, path, len, offset):
+        kind = svn.fs.check_path(root, path, self.taskpool)
         if kind != svn.core.svn_node_file:
             e = OSError("Can't read a non-file %s" % path)
             e.errno = ENOENT
             raise e
 
-        stream = svn.fs.file_contents(self.root, path, self.taskpool)
+        stream = svn.fs.file_contents(root, path, self.taskpool)
         svn.core.svn_stream_read(stream, int(offset))
         return svn.core.svn_stream_read(stream, len)
 
     def read(self, path, len, offset):
-        assert False
+        if self.revision == 'all':
+            m = self.file_re.match(path)
+            if m:
+                return self.__read_svn(self.__get_root(int(m.group(1))), m.group(2), len, offset)
+        else:
+            return self.__read_svn(self.root, path, len, offset)
+        
+        e = OSError("Nothing found at %s " % path)
+        e.errno = ENOENT
+        raise e
     
     def write(self, path, buf, off):
         e = OSError("Read-only view, can't mkdir %s " % path)
