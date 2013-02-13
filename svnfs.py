@@ -66,7 +66,7 @@ class SvnFS(Fuse):
         kind = svn.fs.check_path(self.root, path, self.taskpool)
         if kind == svn.core.svn_node_none:
             e = OSError("Nothing found at %s " % path)
-            e.errno = ENOENT;
+            e.errno = ENOENT
             raise e
 
         # TODO: CRC of some id?
@@ -99,8 +99,8 @@ class SvnFS(Fuse):
 
     # TODO: support this
     def readlink(self, path):
-        e = OSError("Not supported yet, readlink on %s " % path);
-        e.errno = ENOENT;
+        e = OSError("Not supported yet, readlink on %s " % path)
+        e.errno = ENOENT
         raise e
 
     def __get_files_list(self, path):
@@ -116,53 +116,53 @@ class SvnFS(Fuse):
             yield fuse.Direntry(f)
 
     def unlink(self, path):
-        e = OSError("Read-only view, can't unlink %s " % path);
-        e.errno = EROFS;
+        e = OSError("Read-only view, can't unlink %s " % path)
+        e.errno = EROFS
         raise e
 
     def rmdir(self, path):
-        e = OSError("Read-only view, can't rmdir %s " % path);
-        e.errno = EROFS;
+        e = OSError("Read-only view, can't rmdir %s " % path)
+        e.errno = EROFS
         raise e
 
     def symlink(self, path, path1):
-        e = OSError("Read-only view, can't symlink %s " % path);
-        e.errno = EROFS;
+        e = OSError("Read-only view, can't symlink %s " % path)
+        e.errno = EROFS
         raise e
 
     def rename(self, path, path1):
-        e = OSError("Read-only view, can't rename %s " % path);
-        e.errno = EROFS;
+        e = OSError("Read-only view, can't rename %s " % path)
+        e.errno = EROFS
         raise e
 
     def link(self, path, path1):
-        e = OSError("Read-only view, can't link %s " % path);
-        e.errno = EROFS;
+        e = OSError("Read-only view, can't link %s " % path)
+        e.errno = EROFS
         raise e
 
     def chmod(self, path, mode):
-        e = OSError("Read-only view, can't chmod %s " % path);
-        e.errno = EROFS;
+        e = OSError("Read-only view, can't chmod %s " % path)
+        e.errno = EROFS
         raise e
 
     def chown(self, path, user, group):
-        e = OSError("Read-only view, can't chown %s " % path);
-        e.errno = EROFS;
+        e = OSError("Read-only view, can't chown %s " % path)
+        e.errno = EROFS
         raise e
 
     def truncate(self, path, size):
-        e = OSError("Read-only view, can't truncate %s " % path);
-        e.errno = EROFS;
+        e = OSError("Read-only view, can't truncate %s " % path)
+        e.errno = EROFS
         raise e
 
     def mknod(self, path, mode, dev):
-        e = OSError("Read-only view, can't mknod %s " % path);
-        e.errno = EROFS;
+        e = OSError("Read-only view, can't mknod %s " % path)
+        e.errno = EROFS
         raise e
 
     def mkdir(self, path, mode):
-        e = OSError("Read-only view, can't mkdir %s " % path);
-        e.errno = EROFS;
+        e = OSError("Read-only view, can't mkdir %s " % path)
+        e.errno = EROFS
         raise e
 
     def utime(self, path, times):
@@ -171,8 +171,8 @@ class SvnFS(Fuse):
     def open(self, path, flags):
         if ((flags & os.O_WRONLY) or (flags & os.O_RDWR) or (flags & os.O_APPEND) or \
            (flags & os.O_CREAT) or (flags & os.O_TRUNC) or (flags & os.O_TRUNC)):
-            e = OSError("Read-only view, can't create %s " % path);
-            e.errno = EROFS;
+            e = OSError("Read-only view, can't create %s " % path)
+            e.errno = EROFS
             raise e
         return 0
     
@@ -180,7 +180,7 @@ class SvnFS(Fuse):
         kind = svn.fs.check_path(self.root, path, self.taskpool)
         if kind != svn.core.svn_node_file:
             e = OSError("Can't read a non-file %s" % path)
-            e.errno = ENOENT;
+            e.errno = ENOENT
             raise e
 
         stream = svn.fs.file_contents(self.root, path, self.taskpool)
@@ -188,8 +188,8 @@ class SvnFS(Fuse):
         return svn.core.svn_stream_read(stream, len)
     
     def write(self, path, buf, off):
-        e = OSError("Read-only view, can't mkdir %s " % path);
-        e.errno = EROFS;
+        e = OSError("Read-only view, can't mkdir %s " % path)
+        e.errno = EROFS
         raise e
     
     def release(self, path, flags):
