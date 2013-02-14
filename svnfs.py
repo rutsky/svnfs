@@ -35,6 +35,11 @@ import binascii
 from errno import *
 from stat import *
 
+try:
+    from collections import OrderedDict
+except ImportError:
+    from OrderedDict import OrderedDict
+
 # Import threading modules. TODO: Otherwise program prints on exit:
 # Exception KeyError: KeyError(139848519223040,) in <module 'threading' from '/usr/lib64/python2.7/threading.pyc'> ignored
 import threading
@@ -47,6 +52,23 @@ import svn
 import svn.repos
 import svn.fs
 import svn.core
+
+
+class LimitedSizeDict(OrderedDict):
+    """http://stackoverflow.com/questions/2437617/limiting-the-size-of-a-python-dictionary"""
+    def __init__(self, *args, **kwds):
+       self.size_limit = kwds.pop("size_limit", None)
+       OrderedDict.__init__(self, *args, **kwds)
+       self._check_size_limit()
+
+    def __setitem__(self, key, value):
+        OrderedDict.__setitem__(self, key, value)
+        self._check_size_limit()
+
+    def _check_size_limit(self):
+        if self.size_limit is not None:
+            while len(self) > self.size_limit:
+                self.popitem(last=False)
 
 
 class SvnFS(Fuse):
@@ -64,18 +86,26 @@ class SvnFS(Fuse):
     
         self.fs_ptr = svn.repos.svn_repos_fs(svn.repos.svn_repos_open(svn.core.svn_path_canonicalize(self.repospath)))
         
-        if self.revision == 'all':
-            # revision -> revision_root object
-            self.roots = {}
-        else:
+        # revision -> revision_root object
+        self.roots = {}
+        
+        if self.revision != 'all':
             self.rev = svn.fs.youngest_rev(self.fs_ptr) if self.revision == 'head' else svnfs.revision
-            self.root = svn.fs.revision_root(self.fs_ptr, self.rev)
 
         # TODO
         self.pool = self.taskpool = None
         
         # revision -> time
         self.revision_creation_time_cache = {}
+        
+        # (rev, path) -> [stream, offset, lock]
+        self.file_stream_cache = LimitedSizeDict(size_limit=100)
+        
+    def __get_file_stream(self, rev, path):
+        return self.file_stream_cache.setdefault((rev, path),
+            [svn.fs.file_contents(self.__get_root(rev), path, self.taskpool), 
+             0,
+             threading.RLock()])
     
     def __revision_creation_time_impl(self, rev):
         date = svn.fs.revision_prop(self.fs_ptr, rev,
@@ -180,7 +210,7 @@ class SvnFS(Fuse):
             if m:
                 return self.__getattr_svn(self.__get_root(int(m.group(1))), m.group(2))
         else:
-            return self.__getattr_svn(self.root, path)
+            return self.__getattr_svn(self.__get_root(self.rev), path)
         
         e = OSError("Nothing found at %s " % path)
         e.errno = ENOENT
@@ -210,7 +240,7 @@ class SvnFS(Fuse):
             if m:
                 return self.__get_files_list_svn(self.__get_root(int(m.group(1))), m.group(2))
         else:
-            return self.__get_files_list_svn(self.root, path)
+            return self.__get_files_list_svn(self.__get_root(self.rev), path)
 
         e = OSError("Nothing found at %s " % path)
         e.errno = ENOENT
@@ -284,26 +314,41 @@ class SvnFS(Fuse):
             e = OSError("Read-only view, can't create %s " % path)
             e.errno = EROFS
             raise e
+
         return 0
     
-    def __read_svn(self, root, path, len, offset):
+    def __read_svn(self, rev, path, len, offset):
+        root = self.__get_root(rev)
         kind = svn.fs.check_path(root, path, self.taskpool)
         if kind != svn.core.svn_node_file:
             e = OSError("Can't read a non-file %s" % path)
             e.errno = ENOENT
             raise e
 
-        stream = svn.fs.file_contents(root, path, self.taskpool)
-        svn.core.svn_stream_read(stream, int(offset))
-        return svn.core.svn_stream_read(stream, len)
+        stream_offset_lock = self.__get_file_stream(rev, path)
+        with stream_offset_lock[2]:
+            if stream_offset_lock[1] > offset:
+                print "Cache miss for", rev, path, offset, len # TODO: log
+                stream_offset_lock[0] = svn.fs.file_contents(root, path, self.taskpool)
+                stream_offset_lock[1] = 0
+            
+            seek_cur = int(offset) - stream_offset_lock[1]
+            if seek_cur > 0:
+                # Skip not needed
+                svn.core.svn_stream_read(stream_offset_lock[0], seek_cur)
+            data = svn.core.svn_stream_read(stream_offset_lock[0], len)
+            
+            stream_offset_lock[1] += seek_cur + len
+            
+            return data
 
     def read(self, path, len, offset):
         if self.revision == 'all':
             m = self.file_re.match(path)
             if m:
-                return self.__read_svn(self.__get_root(int(m.group(1))), m.group(2), len, offset)
+                return self.__read_svn(int(m.group(1)), m.group(2), len, offset)
         else:
-            return self.__read_svn(self.root, path, len, offset)
+            return self.__read_svn(self.rev, path, len, offset)
         
         e = OSError("Nothing found at %s " % path)
         e.errno = ENOENT
