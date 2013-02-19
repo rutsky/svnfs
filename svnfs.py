@@ -85,7 +85,21 @@ class SvnFS(Fuse):
         
         self.uid = None
         self.gid = None
+        self.logfile = None
         
+    def fsinit(self):
+        # Drop privileges
+        if self.uid is not None:
+            os.setuid(self.uid)
+        if self.gid is not None:
+            os.setgid(self.gid)
+
+        # Redirect output to log file
+        if self.logfile is not None:
+            log_fd = os.open(self.logfile, os.O_WRONLY | os.O_CREAT)
+            os.dup2(log_fd, 1)
+            os.dup2(log_fd, 2)
+
     def init_repo(self):
         assert self.repospath is not None
     
@@ -390,12 +404,15 @@ if __name__ == '__main__':
     
     svnfs.parser.add_option(mountopt="svnrepo", dest="repospath", metavar="SVN-REPO-DIR",
         help="path to subversion reposiotory")
-    svnfs.parser.add_option(mountopt="revision", dest="revision", default="all",
+    svnfs.parser.add_option(mountopt="revision", dest="revision", default="all", metavar="REV",
         help="revision specification: 'all', 'HEAD' or number [default: %default]")
-    svnfs.parser.add_option(mountopt="uid", dest="uid",
+    svnfs.parser.add_option(mountopt="uid", dest="uid", metavar="UID",
         help="run daemon under different user ID")
-    svnfs.parser.add_option(mountopt="gid", dest="gid",
+    svnfs.parser.add_option(mountopt="gid", dest="gid", metavar="GID",
         help="run daemon under different group ID")
+
+    svnfs.parser.add_option(mountopt="logfile", dest="logfile", metavar="PATH-TO-LOG-FILE",
+        help="output stdout/stderr into file")
     
     svnfs.parse(values=svnfs, errex=1)
     
@@ -421,24 +438,20 @@ if __name__ == '__main__':
             os.chdir("/")
             
             if svnfs.gid is not None:
-                # Change GID
+                # Convert GID to numeric
                 
                 try:
                     svnfs.gid = int(svnfs.gid)
                 except ValueError:
                     svnfs.gid = grp.getgrnam(svnfs.gid).gr_gid
-                
-                os.setgid(svnfs.gid)
             
             if svnfs.uid is not None:
-                # Change UID
+                # Convert UID to numeric
                 
                 try:
                     svnfs.uid = int(svnfs.uid)
                 except ValueError:
                     svnfs.uid = pwd.getpwnam(svnfs.uid).pw_uid
-                
-                os.setuid(svnfs.uid)
 
             if svnfs.revision is None:
                 svnfs.revision = "all"
