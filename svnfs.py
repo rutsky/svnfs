@@ -31,6 +31,8 @@
 import os
 import re
 import sys
+import pwd
+import grp
 import binascii
 from errno import *
 from stat import *
@@ -80,6 +82,9 @@ class SvnFS(Fuse):
         
         self.repospath = None
         self.revision = None
+        
+        self.uid = None
+        self.gid = None
         
     def init_repo(self):
         assert self.repospath is not None
@@ -387,6 +392,10 @@ if __name__ == '__main__':
         help="path to subversion reposiotory")
     svnfs.parser.add_option(mountopt="revision", dest="revision", default="all",
         help="revision specification: 'all', 'HEAD' or number [default: %default]")
+    svnfs.parser.add_option(mountopt="uid", dest="uid",
+        help="run daemon under different user ID")
+    svnfs.parser.add_option(mountopt="gid", dest="gid",
+        help="run daemon under different group ID")
     
     svnfs.parse(values=svnfs, errex=1)
     
@@ -411,6 +420,26 @@ if __name__ == '__main__':
             # When FUSE daemonizes it changes CWD to root, do it manually.
             os.chdir("/")
             
+            if svnfs.gid is not None:
+                # Change GID
+                
+                try:
+                    svnfs.gid = int(svnfs.gid)
+                except ValueError:
+                    svnfs.gid = grp.getgrnam(svnfs.gid).gr_gid
+                
+                os.setgid(svnfs.gid)
+            
+            if svnfs.uid is not None:
+                # Change UID
+                
+                try:
+                    svnfs.uid = int(svnfs.uid)
+                except ValueError:
+                    svnfs.uid = pwd.getpwnam(svnfs.uid).pw_uid
+                
+                os.setuid(svnfs.uid)
+
             if svnfs.revision is None:
                 svnfs.revision = "all"
             svnfs.revision = svnfs.revision.lower()
