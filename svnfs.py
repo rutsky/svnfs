@@ -36,7 +36,10 @@ import re
 import sys
 import pwd
 import grp
+import datetime
 import binascii
+import traceback
+import functools
 from errno import *
 from stat import *
 
@@ -51,6 +54,7 @@ import threading
 
 import fuse
 fuse.fuse_python_api = (0, 2)
+fuse.feature_assert('has_init')
 from fuse import Fuse
 
 import svn
@@ -76,6 +80,28 @@ class LimitedSizeDict(OrderedDict):
                 self.popitem(last=False)
 
 
+def redirect_output(output_file):
+    # Flush ouput before setting redirection
+    sys.stdout.flush()
+    sys.stderr.flush()
+    
+    # Redirect stdout and stderr to log file
+    log_fd = os.open(output_file, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+    os.dup2(log_fd, 1)
+    os.dup2(log_fd, 2)
+
+
+def print_caught_exception(function):
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except:
+            traceback.print_exc(None, sys.stdout)
+            raise
+    return wrapper
+
+
 class SvnFS(Fuse):
     revision_dir_re = re.compile(r"^/(\d+)$")
     file_re = re.compile(r"^/(\d+)(/.*)$")
@@ -89,19 +115,21 @@ class SvnFS(Fuse):
         self.uid = None
         self.gid = None
         self.logfile = None
-        
+    
+    # TODO: exceptions here not handled properly, so output them manually
+    @print_caught_exception
     def fsinit(self):
+        # Called only in daemon mode?
+    
+        # Redirect output to log file (in privileged mode)
+        if self.logfile is not None:
+            redirect_output(self.logfile)
+
         # Drop privileges
         if self.uid is not None:
             os.setuid(self.uid)
         if self.gid is not None:
             os.setgid(self.gid)
-
-        # Redirect output to log file
-        if self.logfile is not None:
-            log_fd = os.open(self.logfile, os.O_WRONLY | os.O_CREAT)
-            os.dup2(log_fd, 1)
-            os.dup2(log_fd, 2)
 
     def init_repo(self):
         assert self.repospath is not None
@@ -392,7 +420,7 @@ class SvnFS(Fuse):
         st.f_bfree = 0
         st.f_files = 0
         st.f_ffree = 0
-        st.f_namelen = 80
+        st.f_namelen = 80 # TODO
         
         return st
 
@@ -418,6 +446,12 @@ if __name__ == '__main__':
         help="output stdout/stderr into file")
     
     svnfs.parse(values=svnfs, errex=1)
+    
+    # Redirect output at early stage
+    if svnfs.logfile is not None:
+        svnfs.logfile = os.path.abspath(svnfs.logfile)
+        redirect_output(svnfs.logfile)
+        print "Log opened at {0}".format(str(datetime.datetime.now()))
     
     if svnfs.parser.fuse_args.mount_expected():
         if len(svnfs.cmdline[1]) > 1:
@@ -474,6 +508,10 @@ if __name__ == '__main__':
                 sys.stderr.write("Subversion repository opening failed: {0}\n".format(str(e)))
                 sys.exit(1)
 
+    # Flush output before daemonizing
+    sys.stdout.flush()
+    sys.stderr.flush()
+    
     try:
         svnfs.main()
     except fuse.FuseError as e:
