@@ -23,9 +23,7 @@
 #        - work out a better way to represent inodes than binascii.crc32()
 #
 #  bob TODO:
-#        - try pure ctypes bindings - they provide fuse_file_info structure 
-#          passing to open()/read() which allows to implement better streams
-#          caching
+#        - try use statefull files as in xmp.py example
 #
 #  USAGE:  - install and load the "fuse" kernel module 
 #            (tested with Linux 2.6.10, Fuse 2.2.1)
