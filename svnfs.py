@@ -126,10 +126,10 @@ class SvnFS(Fuse):
             redirect_output(self.logfile)
 
         # Drop privileges
-        if self.uid is not None:
-            os.setuid(self.uid)
         if self.gid is not None:
             os.setgid(self.gid)
+        if self.uid is not None:
+            os.setuid(self.uid)
 
     def init_repo(self):
         assert self.repospath is not None
