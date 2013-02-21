@@ -24,9 +24,9 @@
 #
 #  bob TODO:
 #        - try use statefull files as in xmp.py example
+#        - write tests
 #
 #  USAGE:  - install and load the "fuse" kernel module 
-#            (tested with Linux 2.6.10, Fuse 2.2.1)
 #          - run "svnfs.py /mnt/wherever -o svnrepo=/var/lib/svn/repodir" or
 #            "svnfs.py /var/lib/svn/repodir /mnt/wherever"
 #          - run "fusermount -u /mnt/wherever" to unmount
@@ -40,8 +40,8 @@ import datetime
 import binascii
 import traceback
 import functools
-from errno import *
-from stat import *
+import stat
+import errno
 
 try:
     from collections import OrderedDict
@@ -66,9 +66,9 @@ import svn.core
 class LimitedSizeDict(OrderedDict):
     """http://stackoverflow.com/questions/2437617/limiting-the-size-of-a-python-dictionary"""
     def __init__(self, *args, **kwds):
-       self.size_limit = kwds.pop("size_limit", None)
-       OrderedDict.__init__(self, *args, **kwds)
-       self._check_size_limit()
+        self.size_limit = kwds.pop("size_limit", None)
+        OrderedDict.__init__(self, *args, **kwds)
+        self._check_size_limit()
 
     def __setitem__(self, key, value):
         OrderedDict.__setitem__(self, key, value)
@@ -81,7 +81,7 @@ class LimitedSizeDict(OrderedDict):
 
 
 def redirect_output(output_file):
-    # Flush ouput before setting redirection
+    # Flush output before setting redirection
     sys.stdout.flush()
     sys.stderr.flush()
     
@@ -97,7 +97,9 @@ def print_caught_exception(function):
         try:
             return function(*args, **kwargs)
         except:
+            sys.stderr.write("print_caught_exception():\n")
             traceback.print_exc(None, sys.stderr)
+            sys.stderr.flush()
             raise
     return wrapper
 
@@ -174,7 +176,7 @@ class SvnFS(Fuse):
         kind = svn.fs.check_path(root, path, self.taskpool)
         if kind == svn.core.svn_node_none:
             e = OSError("Nothing found at %s " % path)
-            e.errno = ENOENT
+            e.errno = errno.ENOENT
             raise e
 
         # TODO: CRC of some id?
@@ -195,10 +197,10 @@ class SvnFS(Fuse):
         st.st_atime = time
         
         if kind == svn.core.svn_node_dir:
-            st.st_mode = S_IFDIR | 0555
+            st.st_mode = stat.S_IFDIR | 0555
             st.st_size = 512
         else:
-            st.st_mode = S_IFREG | 0444
+            st.st_mode = stat.S_IFREG | 0444
             st.st_size = svn.fs.file_length(root, path, self.taskpool)
 
         return st
@@ -221,7 +223,7 @@ class SvnFS(Fuse):
         st.st_ctime = time
         st.st_atime = time
         
-        st.st_mode = S_IFDIR | 0555
+        st.st_mode = stat.S_IFDIR | 0555
         st.st_size = 512
 
         return st
@@ -242,7 +244,7 @@ class SvnFS(Fuse):
         st.st_ctime = time
         st.st_atime = time
         
-        st.st_mode = S_IFDIR | 0555
+        st.st_mode = stat.S_IFDIR | 0555
         st.st_size = 512
 
         return st
@@ -263,13 +265,14 @@ class SvnFS(Fuse):
             return self.__getattr_svn(self.__get_root(self.rev), path)
         
         e = OSError("Nothing found at %s " % path)
-        e.errno = ENOENT
+        e.errno = errno.ENOENT
         raise e
 
     # TODO: support this
+    @print_caught_exception
     def readlink(self, path):
         e = OSError("Not supported yet, readlink on %s " % path)
-        e.errno = ENOENT
+        e.errno = errno.ENOENT
         raise e
 
     def __get_files_list_svn(self, root, path):
@@ -293,93 +296,107 @@ class SvnFS(Fuse):
             return self.__get_files_list_svn(self.__get_root(self.rev), path)
 
         e = OSError("Nothing found at %s " % path)
-        e.errno = ENOENT
+        e.errno = errno.ENOENT
         raise e
 
+    @print_caught_exception
     def getdir(self, path):
         return map(lambda x: (x, 0), self.__get_files_list(path))
 
+    @print_caught_exception
     def readdir(self, path, offset):
         # TODO: offset?
         for f in  self.__get_files_list(path) + [".", ".."]:
             yield fuse.Direntry(f)
 
+    @print_caught_exception
     def unlink(self, path):
         e = OSError("Read-only view, can't unlink %s " % path)
-        e.errno = EROFS
+        e.errno = errno.EROFS
         raise e
 
+    @print_caught_exception
     def rmdir(self, path):
         e = OSError("Read-only view, can't rmdir %s " % path)
-        e.errno = EROFS
+        e.errno = errno.EROFS
         raise e
 
+    @print_caught_exception
     def symlink(self, path, path1):
         e = OSError("Read-only view, can't symlink %s " % path)
-        e.errno = EROFS
+        e.errno = errno.EROFS
         raise e
 
+    @print_caught_exception
     def rename(self, path, path1):
         e = OSError("Read-only view, can't rename %s " % path)
-        e.errno = EROFS
+        e.errno = errno.EROFS
         raise e
 
+    @print_caught_exception
     def link(self, path, path1):
         e = OSError("Read-only view, can't link %s " % path)
-        e.errno = EROFS
+        e.errno = errno.EROFS
         raise e
 
+    @print_caught_exception
     def chmod(self, path, mode):
         e = OSError("Read-only view, can't chmod %s " % path)
-        e.errno = EROFS
+        e.errno = errno.EROFS
         raise e
 
+    @print_caught_exception
     def chown(self, path, user, group):
         e = OSError("Read-only view, can't chown %s " % path)
-        e.errno = EROFS
+        e.errno = errno.EROFS
         raise e
 
+    @print_caught_exception
     def truncate(self, path, size):
         e = OSError("Read-only view, can't truncate %s " % path)
-        e.errno = EROFS
+        e.errno = errno.EROFS
         raise e
 
+    @print_caught_exception
     def mknod(self, path, mode, dev):
         e = OSError("Read-only view, can't mknod %s " % path)
-        e.errno = EROFS
+        e.errno = errno.EROFS
         raise e
 
+    @print_caught_exception
     def mkdir(self, path, mode):
         e = OSError("Read-only view, can't mkdir %s " % path)
-        e.errno = EROFS
+        e.errno = errno.EROFS
         raise e
 
+    @print_caught_exception
     def utime(self, path, times):
         return os.utime(path, times)
 
+    @print_caught_exception
     def open(self, path, flags):
-        # TODO: check existance?
+        # TODO: check existence?
         if ((flags & os.O_WRONLY) or (flags & os.O_RDWR) or (flags & os.O_APPEND) or \
            (flags & os.O_CREAT) or (flags & os.O_TRUNC) or (flags & os.O_TRUNC)):
             e = OSError("Read-only view, can't create %s " % path)
-            e.errno = EROFS
+            e.errno = errno.EROFS
             raise e
 
         return 0
     
-    def __read_svn(self, rev, path, len, offset):
+    def __read_svn(self, rev, path, length, offset):
         root = self.__get_root(rev)
         kind = svn.fs.check_path(root, path, self.taskpool)
         if kind != svn.core.svn_node_file:
             e = OSError("Can't read a non-file %s" % path)
-            e.errno = ENOENT
+            e.errno = errno.ENOENT
             raise e
 
         stream_offset_lock = self.__get_file_stream(rev, path)
         with stream_offset_lock[2]:
             if stream_offset_lock[1] > offset:
                 # TODO: log
-                sys.stdout.write("Cache miss for r{0} '{1}' offset={2} len={3}\n".format(rev, path, offset, len))
+                sys.stdout.write("Cache miss for r{0} '{1}' offset={2} length={3}\n".format(rev, path, offset, length))
                 sys.stdout.flush()
 
                 stream_offset_lock[0] = svn.fs.file_contents(root, path, self.taskpool)
@@ -389,32 +406,36 @@ class SvnFS(Fuse):
             if seek_cur > 0:
                 # Skip not needed
                 svn.core.svn_stream_read(stream_offset_lock[0], seek_cur)
-            data = svn.core.svn_stream_read(stream_offset_lock[0], len)
+            data = svn.core.svn_stream_read(stream_offset_lock[0], length)
             
-            stream_offset_lock[1] += seek_cur + len
+            stream_offset_lock[1] += seek_cur + length
             
             return data
 
-    def read(self, path, len, offset):
+    @print_caught_exception
+    def read(self, path, length, offset):
         if self.revision == 'all':
             m = self.file_re.match(path)
             if m:
-                return self.__read_svn(int(m.group(1)), m.group(2), len, offset)
+                return self.__read_svn(int(m.group(1)), m.group(2), length, offset)
         else:
-            return self.__read_svn(self.rev, path, len, offset)
+            return self.__read_svn(self.rev, path, length, offset)
         
         e = OSError("Nothing found at %s " % path)
-        e.errno = ENOENT
+        e.errno = errno.ENOENT
         raise e
     
+    @print_caught_exception
     def write(self, path, buf, off):
         e = OSError("Read-only view, can't mkdir %s " % path)
-        e.errno = EROFS
+        e.errno = errno.EROFS
         raise e
     
+    @print_caught_exception
     def release(self, path, flags):
         return 0
 
+    @print_caught_exception
     def statfs(self):
         st = fuse.StatVfs()
         
@@ -427,6 +448,7 @@ class SvnFS(Fuse):
         
         return st
 
+    @print_caught_exception
     def fsync(self, path, isfsyncfile):
         return 0
 
