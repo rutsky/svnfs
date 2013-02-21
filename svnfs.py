@@ -143,9 +143,6 @@ class SvnFS(Fuse):
         if self.revision != 'all':
             self.rev = svn.fs.youngest_rev(self.fs_ptr) if self.revision == 'head' else svnfs.revision
 
-        # TODO
-        self.pool = self.taskpool = None
-        
         # revision -> time
         self.revision_creation_time_cache = {}
         
@@ -154,14 +151,14 @@ class SvnFS(Fuse):
         
     def __get_file_stream(self, rev, path):
         return self.file_stream_cache.setdefault((rev, path),
-            [svn.fs.file_contents(self.__get_root(rev), path, self.taskpool), 
+            [svn.fs.file_contents(self.__get_root(rev), path), 
              0,
              threading.RLock()])
     
     def __revision_creation_time_impl(self, rev):
         date = svn.fs.revision_prop(self.fs_ptr, rev,
-            svn.core.SVN_PROP_REVISION_DATE, self.taskpool)
-        return svn.core.secs_from_timestr(date, self.taskpool)
+            svn.core.SVN_PROP_REVISION_DATE)
+        return svn.core.secs_from_timestr(date)
 
     def __revision_creation_time(self, rev):
         return self.revision_creation_time_cache.setdefault(rev, self.__revision_creation_time_impl(rev))
@@ -172,14 +169,14 @@ class SvnFS(Fuse):
     def __getattr_svn(self, root, path):
         st = fuse.Stat()
 
-        kind = svn.fs.check_path(root, path, self.taskpool)
+        kind = svn.fs.check_path(root, path)
         if kind == svn.core.svn_node_none:
             e = OSError("Nothing found at %s " % path)
             e.errno = errno.ENOENT
             raise e
 
         # TODO: CRC of some id?
-        st.st_ino = svn.fs.unparse_id(svn.fs.node_id(root, path, self.taskpool), self.taskpool)
+        st.st_ino = svn.fs.unparse_id(svn.fs.node_id(root, path))
         st.st_ino = abs(binascii.crc32(st.st_ino))
         
         st.st_size = 0
@@ -188,7 +185,7 @@ class SvnFS(Fuse):
         st.st_uid = 0
         st.st_gid = 0
 
-        created_rev = svn.fs.node_created_rev(root, path, self.taskpool)
+        created_rev = svn.fs.node_created_rev(root, path)
         time = self.__revision_creation_time(created_rev)
         st.st_mtime = time
         st.st_ctime = time
@@ -199,7 +196,7 @@ class SvnFS(Fuse):
             st.st_size = 512
         else:
             st.st_mode = stat.S_IFREG | 0444
-            st.st_size = svn.fs.file_length(root, path, self.taskpool)
+            st.st_size = svn.fs.file_length(root, path)
 
         return st
         
@@ -275,7 +272,7 @@ class SvnFS(Fuse):
 
     def __get_files_list_svn(self, root, path):
         # TODO: check that directory exists first?
-        return svn.fs.dir_entries(root, path, self.taskpool).keys()
+        return svn.fs.dir_entries(root, path).keys()
 
     def __get_files_list(self, path):
         if self.revision == 'all':
@@ -384,7 +381,7 @@ class SvnFS(Fuse):
     
     def __read_svn(self, rev, path, length, offset):
         root = self.__get_root(rev)
-        kind = svn.fs.check_path(root, path, self.taskpool)
+        kind = svn.fs.check_path(root, path)
         if kind != svn.core.svn_node_file:
             e = OSError("Can't read a non-file %s" % path)
             e.errno = errno.ENOENT
@@ -397,7 +394,7 @@ class SvnFS(Fuse):
                 sys.stdout.write("Cache miss for r{0} '{1}' offset={2} length={3}\n".format(rev, path, offset, length))
                 sys.stdout.flush()
 
-                stream_offset_lock[0] = svn.fs.file_contents(root, path, self.taskpool)
+                stream_offset_lock[0] = svn.fs.file_contents(root, path)
                 stream_offset_lock[1] = 0
             
             seek_cur = int(offset) - stream_offset_lock[1]
