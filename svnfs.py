@@ -12,8 +12,7 @@
 #  This is a FUSE module using the Python bindings.  It allows you to mount
 #  a local subversion repository filesystem into the host filesystem, read-only.
 #  
-#  TODO: - support ctime and ctime
-#        - support symlinks
+#  TODO: - support symlinks
 #        - more efficient reading of files (maybe a cache?)
 #        - support following HEAD as it moves, or pegging to a revision
 #          (right now, we're pegged to youngest_rev when we start)
@@ -189,7 +188,6 @@ class SvnFS(Fuse):
         st.st_uid = 0
         st.st_gid = 0
 
-        # TODO: this is modification time, not creation or access
         created_rev = svn.fs.node_created_rev(root, path, self.taskpool)
         time = self.__revision_creation_time(created_rev)
         st.st_mtime = time
