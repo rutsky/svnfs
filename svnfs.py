@@ -97,7 +97,7 @@ def print_caught_exception(function):
         try:
             return function(*args, **kwargs)
         except:
-            traceback.print_exc(None, sys.stdout)
+            traceback.print_exc(None, sys.stderr)
             raise
     return wrapper
 
@@ -378,7 +378,10 @@ class SvnFS(Fuse):
         stream_offset_lock = self.__get_file_stream(rev, path)
         with stream_offset_lock[2]:
             if stream_offset_lock[1] > offset:
-                print "Cache miss for", rev, path, offset, len # TODO: log
+                # TODO: log
+                sys.stdout.write("Cache miss for r{0} '{1}' offset={2} len={3}\n".format(rev, path, offset, len))
+                sys.stdout.flush()
+
                 stream_offset_lock[0] = svn.fs.file_contents(root, path, self.taskpool)
                 stream_offset_lock[1] = 0
             
@@ -518,3 +521,5 @@ if __name__ == '__main__':
     except fuse.FuseError as e:
         sys.stderr.write("Fuse failed: {0}\n".format(str(e)))
         sys.exit(1)
+
+# vim: set ts=4 sw=4 et:
