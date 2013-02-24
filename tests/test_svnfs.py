@@ -2,9 +2,12 @@
 
 import os
 import sys
-import unittest
 import tempfile
 import subprocess
+
+# TODO: check Python version and import unittest2 module, if version is less
+# than 2.7
+import unittest
 
 test_repo = "test_repo"
 svnfs_script = "../svnfs.py"
