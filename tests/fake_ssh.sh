@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# This is fake SSH client for commiting in local Subversion repository.
+
 set -e
 
 # $0 host svnserve -t
