@@ -24,6 +24,7 @@
 #  bob TODO:
 #        - try use statefull files as in xmp.py example
 #        - write tests
+#        - use logging
 #
 #  USAGE:  - install and load the "fuse" kernel module 
 #          - run "svnfs.py /mnt/wherever -o svnrepo=/var/lib/svn/repodir" or
