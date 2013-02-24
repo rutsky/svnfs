@@ -74,7 +74,24 @@ class TestContent(unittest.TestCase):
     
     def test_content(self):
         self.assertTrue(os.path.isdir(os.path.join(self.mnt, "1")))
-
+        self.assertTrue(os.path.isfile(os.path.join(self.mnt, "1", "test.txt")))
+        with open(os.path.join(self.mnt, "1", "test.txt"), "r") as f:
+            self.assertEqual(f.read().strip(), "Test file")
+        
+        self.assertTrue(os.path.isdir(os.path.join(self.mnt, "2")))
+        self.assertTrue(os.path.isfile(os.path.join(self.mnt, "2", "test.txt")))
+        with open(os.path.join(self.mnt, "2", "test.txt"), "r") as f:
+            self.assertEqual(f.read().strip(), "First change")
+    
+    def test_read_only(self):
+        with self.assertRaises(IOError) as cm:
+            open(os.path.join(self.mnt, "test"), "w")
+        
+        ex = cm.exception
+        self.assertTrue(ex.strerror.find("Read-only file system") >= 0, 
+                        msg="Unexpected exception text: '{0}'".format(ex.strerror))
+        self.assertEqual(ex.errno, 30)
+        
 def run_tests():
     if not os.path.isdir(test_repo):
         sys.stderr.write("Error: Test repository not found.\n"
