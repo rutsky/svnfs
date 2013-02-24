@@ -22,4 +22,7 @@ echo "Test file" > test.txt
 svn add test.txt
 svn ci -m "Add test.txt"
 
+echo "First change" > test.txt
+svn ci test.txt -m "First change"
+
 popd > /dev/null
