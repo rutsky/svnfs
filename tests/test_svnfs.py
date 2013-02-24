@@ -8,9 +8,11 @@ import subprocess
 # TODO: check Python version and import unittest2 module, if version is less
 # than 2.7
 import unittest
+import argparse
 
 test_repo = "test_repo"
 svnfs_script = "../svnfs.py"
+interactive_mnt = "mnt"
 
 def is_mounted(directory):
     with open("/etc/mtab") as f:
@@ -73,10 +75,40 @@ class TestContent(unittest.TestCase):
     def test_content(self):
         self.assertTrue(os.path.isdir(os.path.join(self.mnt, "1")))
 
-if __name__ == '__main__':
+def run_tests():
     if not os.path.isdir(test_repo):
         sys.stderr.write("Error: Test repository not found.\n"
             "Create test repository first using ./create_test_repo.sh script.\n")
         sys.exit(1)
 
     unittest.main()
+
+def run_mount():
+    """Mount test repository for interactive testing"""
+    
+    if not os.path.isdir(interactive_mnt):
+        os.mkdir(interactive_mnt)
+    
+    if is_mounted(interactive_mnt):
+        umount_safe(interactive_mnt)
+    
+    r = subprocess.call([svnfs_script, test_repo, interactive_mnt])
+    assert r == 0
+    
+    print(("Test repository mounted under '{mnt}'.\n"
+           "To unmount run:\n"
+           "  fusermount -u {mnt}").format(mnt=interactive_mnt))
+
+def main():
+    parser = argparse.ArgumentParser(description='Test runner for SVNFS')
+    parser.add_argument('--run-mount', action='store_true',
+                        help='Mount test repository for interactive testing')
+    
+    args = parser.parse_args()
+    if args.run_mount:
+        run_mount()
+    else:
+        run_tests()
+
+if __name__ == '__main__':
+    main()
