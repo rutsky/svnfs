@@ -56,7 +56,6 @@ fuse.fuse_python_api = (0, 2)
 fuse.feature_assert('has_init')
 from fuse import Fuse
 
-import svn
 import svn.repos
 import svn.fs
 import svn.core
