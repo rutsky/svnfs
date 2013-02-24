@@ -83,9 +83,18 @@ class TestContent(unittest.TestCase):
         with open(os.path.join(self.mnt, "2", "test.txt"), "r") as f:
             self.assertEqual(f.read().strip(), "First change")
     
-    def test_read_only(self):
+    def test_read_only_revs(self):
         with self.assertRaises(IOError) as cm:
             open(os.path.join(self.mnt, "test"), "w")
+        
+        ex = cm.exception
+        self.assertTrue(ex.strerror.find("Read-only file system") >= 0, 
+                        msg="Unexpected exception text: '{0}'".format(ex.strerror))
+        self.assertEqual(ex.errno, 30)
+    
+    def test_read_only_files(self):
+        with self.assertRaises(IOError) as cm:
+            open(os.path.join(self.mnt, "2", "newfile"), "w")
         
         ex = cm.exception
         self.assertTrue(ex.strerror.find("Read-only file system") >= 0, 
