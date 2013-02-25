@@ -48,7 +48,7 @@ class TestMount(unittest.TestCase):
         umount_safe(self.mnt)
         os.rmdir(self.mnt)
         
-    def test_mount(self):
+    def test_mount_all(self):
         p = subprocess.Popen([svnfs_script, test_repo, self.mnt],
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         out, err = p.communicate()
@@ -58,8 +58,20 @@ class TestMount(unittest.TestCase):
         self.assertEqual(p.returncode, 0)
         
         self.assertEqual(umount(self.mnt), 0)
+    
+    def test_mount_rev1(self):
+        p = subprocess.Popen([svnfs_script, test_repo, self.mnt,
+                              "-o", "revision=1"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = p.communicate()
+        
+        self.assertEqual(out, "")
+        self.assertEqual(err, "")
+        self.assertEqual(p.returncode, 0)
+        
+        self.assertEqual(umount(self.mnt), 0)
 
-class TestContent(unittest.TestCase):
+class TestAllContent(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.mnt = tempfile.mkdtemp(prefix="mnt_")
@@ -76,12 +88,12 @@ class TestContent(unittest.TestCase):
         self.assertTrue(os.path.isdir(os.path.join(self.mnt, "1")))
         self.assertTrue(os.path.isfile(os.path.join(self.mnt, "1", "test.txt")))
         with open(os.path.join(self.mnt, "1", "test.txt"), "r") as f:
-            self.assertEqual(f.read().strip(), "Test file")
+            self.assertEqual(f.read(), "Test file\n")
         
         self.assertTrue(os.path.isdir(os.path.join(self.mnt, "2")))
         self.assertTrue(os.path.isfile(os.path.join(self.mnt, "2", "test.txt")))
         with open(os.path.join(self.mnt, "2", "test.txt"), "r") as f:
-            self.assertEqual(f.read().strip(), "First change")
+            self.assertEqual(f.read(), "First change\n")
     
     def test_read_only_revs(self):
         with self.assertRaises(IOError) as cm:
@@ -100,10 +112,52 @@ class TestContent(unittest.TestCase):
         self.assertTrue(ex.strerror.find("Read-only file system") >= 0, 
                         msg="Unexpected exception text: '{0}'".format(ex.strerror))
         self.assertEqual(ex.errno, 30)
-        
+
     # TODO: test not existing revision
     # TODO: test single revision, and head revision mounting
     # TODO: always check that output doesn't contains exceptions
+
+class TestRev1Content(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.mnt = tempfile.mkdtemp(prefix="mnt_")
+        
+        r = subprocess.call([svnfs_script, test_repo, cls.mnt,
+                             "-o", "revision=1"])
+        assert r == 0
+    
+    @classmethod
+    def tearDownClass(cls):
+        umount_safe(cls.mnt)
+        os.rmdir(cls.mnt)
+    
+    def test_content(self):
+        self.assertTrue(os.path.isfile(os.path.join(self.mnt, "test.txt")))
+        with open(os.path.join(self.mnt, "test.txt"), "r") as f:
+            self.assertEqual(f.read(), "Test file\n")
+        
+        self.assertFalse(os.path.isdir(os.path.join(self.mnt, "2")))
+
+class TestRev2Content(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.mnt = tempfile.mkdtemp(prefix="mnt_")
+        
+        r = subprocess.call([svnfs_script, test_repo, cls.mnt,
+                             "-o", "revision=2"])
+        assert r == 0
+    
+    @classmethod
+    def tearDownClass(cls):
+        umount_safe(cls.mnt)
+        os.rmdir(cls.mnt)
+    
+    def test_content(self):
+        self.assertTrue(os.path.isfile(os.path.join(self.mnt, "test.txt")))
+        with open(os.path.join(self.mnt, "test.txt"), "r") as f:
+            self.assertEqual(f.read(), "First change\n")
+        
+        self.assertFalse(os.path.isdir(os.path.join(self.mnt, "2")))
         
 def run_tests():
     if not os.path.isdir(test_repo):
