@@ -555,7 +555,7 @@ class SvnFS(Fuse):
         
         return st
 
-if __name__ == '__main__':
+def main():
     usage = ("Usage: %prog svn_repository_dir mountpoint [options]\n"
              "    or\n"
              "       %prog mountpoint -o svnrepo=SVN-REPO-DIR [options]\n")
@@ -650,5 +650,8 @@ if __name__ == '__main__':
     except fuse.FuseError as e:
         sys.stderr.write("Fuse failed: {0}\n".format(str(e)))
         sys.exit(1)
+
+if __name__ == '__main__':
+    main()
 
 # vim: set ts=4 sw=4 et:
