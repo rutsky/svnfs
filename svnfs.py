@@ -39,6 +39,7 @@ import re
 import sys
 import pwd
 import grp
+import signal
 import datetime
 import binascii
 import traceback
@@ -262,21 +263,25 @@ class SvnFS(Fuse):
         self.uid = None
         self.gid = None
         self.logfile = None
+        self.send_sigstop = None
     
     # TODO: exceptions here not handled properly, so output them manually
     @trace_exceptions
     def fsinit(self):
-        # Called only in daemon mode?
+        try:
+            # Redirect output to log file (in privileged mode)
+            if self.logfile is not None:
+                redirect_output(self.logfile)
     
-        # Redirect output to log file (in privileged mode)
-        if self.logfile is not None:
-            redirect_output(self.logfile)
+            # Drop privileges
+            if self.gid is not None:
+                os.setgid(self.gid)
+            if self.uid is not None:
+                os.setuid(self.uid)
 
-        # Drop privileges
-        if self.gid is not None:
-            os.setgid(self.gid)
-        if self.uid is not None:
-            os.setuid(self.uid)
+        finally:
+            if self.send_sigstop:
+                os.kill(os.getpid(), signal.SIGSTOP)
 
     def init_repo(self):
         assert self.repospath is not None
@@ -564,6 +569,9 @@ if __name__ == '__main__':
         help="run daemon under different user ID")
     svnfs.parser.add_option(mountopt="gid", dest="gid", metavar="GID",
         help="run daemon under different group ID")
+    svnfs.parser.add_option(mountopt="send_sigstop", dest="send_sigstop", 
+        action="store_true",
+        help="send SIGSTOP signal when file system is initialized (useful with -f)")
 
     svnfs.parser.add_option(mountopt="logfile", dest="logfile", metavar="PATH-TO-LOG-FILE",
         help="output stdout/stderr into file")
