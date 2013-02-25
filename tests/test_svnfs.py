@@ -45,7 +45,13 @@ def umount(directory, lazy=False):
     if lazy:
         cmd.append("-z")
     cmd.append(directory)
-    return subprocess.call(cmd)
+    
+    result = subprocess.call(cmd)
+    
+    if result != 0:
+        subprocess.call(["fuser", "-m", directory])  # Debug
+        
+    return result
 
 
 def umount_safe(directory):
@@ -82,36 +88,47 @@ class TestMount(unittest.TestCase):
         shutil.rmtree(self.mnt)
         
     def test_mount_all(self):
-        p = subprocess.Popen([svnfs_script, test_repo, self.mnt],
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        out, err = p.communicate()
+        self.mount_thread = RunInThread(self.mnt,
+            [svnfs_script, test_repo, self.mnt, "-f", "-o", "send_sigstop"],
+            wait_sigstop=True)
+        self.mount_thread.start()
+  
+        self.assertEqual(umount(self.mnt), 0)
+    
+        self.mount_thread.join()
         
-        self.assertEqual(out, "")
-        self.assertEqual(err, "")
-        self.assertEqual(p.returncode, 0)
-        
-        time.sleep(0.001) # TODO: wait for FS
+        self.assertEqual(self.mount_thread.out, "")
+        self.assertEqual(self.mount_thread.err, "")
+        self.assertEqual(self.mount_thread.returncode, 0)
+    
+    def test_mount_rev1(self):
+        self.mount_thread = RunInThread(self.mnt,
+            [svnfs_script, test_repo, self.mnt, "-f", "-o", "send_sigstop,revision=1"],
+            wait_sigstop=True)
+        self.mount_thread.start()
+  
+        # TODO: invoking umount just after mounting leads to Device or resource busy error
+        time.sleep(0.05)
         
         self.assertEqual(umount(self.mnt), 0)
     
-    def test_mount_rev1(self):
-        p = subprocess.Popen([svnfs_script, test_repo, self.mnt,
-                              "-o", "revision=1"],
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        out, err = p.communicate()
+        self.mount_thread.join()
         
-        self.assertEqual(out, "")
-        self.assertEqual(err, "")
-        self.assertEqual(p.returncode, 0)
-
-        time.sleep(0.001) # TODO: wait for FS
-        
-        self.assertEqual(umount(self.mnt), 0)
+        self.assertEqual(self.mount_thread.out, "")
+        self.assertEqual(self.mount_thread.err, "")
+        self.assertEqual(self.mount_thread.returncode, 0)
 
 
 class RunInThread(threading.Thread):
-    def __init__(self, run_args, *args, **kwargs):
+    def __init__(self, mnt, run_args, *args, **kwargs):
+        self.mnt = mnt
         self.wait_sigstop = kwargs.pop("wait_sigstop", False)
+        
+        if self.wait_sigstop:
+            assert filter(lambda x: x.find("send_sigstop") >= 0, run_args), \
+                "wait_sigstop must be used with send_sigstop SvnFS option"
+            assert "-f" in run_args, \
+                "wait_sigstop must be used with -f SvnFS option"
         
         super(RunInThread, self).__init__(*args, **kwargs)
         self.run_args = run_args
@@ -119,27 +136,52 @@ class RunInThread(threading.Thread):
         
         self.err = None
         self.out = None
+        self.returncode = None
         
         self.ready = threading.Event()
         
-        if self.wait_sigstop:
-            self.old_sigchld_handler = signal.signal(signal.SIGCHLD, self._sigchld_handler)
-        
     def _sigchld_handler(self, signum, frame):
-        signal.signal(signal.SIGCHLD, self.old_sigchld_handler)
-        os.kill(self.process.pid, signal.SIGCONT)
-        self.ready.set()
+        try:
+            signal.signal(signal.SIGCHLD, self.old_sigchld_handler)
+            os.kill(self.process.pid, signal.SIGCONT)
+        finally:
+            self.ready.set()
     
     def run(self):
-        self.process = subprocess.Popen(self.run_args,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
+        try:
+            self.process = subprocess.Popen(self.run_args,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except:
+            # Set thread as ready to prevent deadlock
+            self.ready.set()
+            raise
+            
         if self.wait_sigstop:
             self.err, self.out = self.process.communicate()
             # ready.set() should be called from SIGCHLD handler
         else:
             self.ready.set()
             self.err, self.out = self.process.communicate()
+        
+        self.returncode = self.process.returncode
+            
+    def start(self):
+        if self.wait_sigstop:
+            self.old_sigchld_handler = signal.signal(signal.SIGCHLD, self._sigchld_handler)
+        
+        super(RunInThread, self).start()
+        
+        while not self.ready.wait(0.001):
+            pass
+
+        # Restore handler one more time
+        signal.signal(signal.SIGCHLD, self.old_sigchld_handler)
+        
+        # to be sure, that FS is up
+        os.stat(self.mnt)
+        
+        # TODO: invoking umount just after mounting leads to "Device or resource busy" error
+        time.sleep(0.05)
 
 
 class BaseTestContent(unittest.TestCase):
@@ -153,13 +195,11 @@ class BaseTestContent(unittest.TestCase):
         options = "send_sigstop"
         if self.svnfs_options:
             options += "," + self.svnfs_options
-        self.mount_thread = RunInThread([svnfs_script, test_repo, self.mnt, 
-                                         "-o", options, "-f"],
+        self.mount_thread = RunInThread(self.mnt, 
+            [svnfs_script, test_repo, self.mnt, "-o", options, "-f"],
                                         wait_sigstop=True)
         self.mount_thread.start()
-        while not self.mount_thread.ready.wait(0.001):
-            pass
-    
+            
     def tearDown(self):
         umount_safe(self.mnt)
         self.mount_thread.join()
@@ -202,7 +242,7 @@ class TestAllContent(BaseTestAllContent):
     
     def test_read_only_revs(self):
         with self.assertRaises(IOError) as cm:
-            with open(os.path.join(self.mnt, "test"), "w") as f:
+            with open(os.path.join(self.mnt, "test"), "w") as _:
                 pass
         
         ex = cm.exception
@@ -212,7 +252,7 @@ class TestAllContent(BaseTestAllContent):
     
     def test_read_only_files(self):
         with self.assertRaises(IOError) as cm:
-            with open(os.path.join(self.mnt, "2", "newfile"), "w") as f:
+            with open(os.path.join(self.mnt, "2", "newfile"), "w") as _:
                 pass
         
         ex = cm.exception
@@ -239,13 +279,13 @@ class TestAllContent(BaseTestAllContent):
         self.assertEqual(stat.st_size, len("First change\n"))
         
         def call_getattr(file_path):
-            for i in xrange(10000):
+            for _ in xrange(10000):
                 os.stat(file_path)
                 os.stat(file_path)
                 os.stat(file_path)
         
         processes = [multiprocessing.Process(target=call_getattr, args=(file_path,))
-                     for i in xrange(20)]
+                     for _ in xrange(20)]
         
         for p in processes:
             p.start()
@@ -264,6 +304,15 @@ class TestRev1Content(BaseTestRev1Content):
             self.assertEqual(f.read(), "Test file\n")
         
         self.assertFalse(os.path.isdir(os.path.join(self.mnt, "2")))
+        
+    def test_file_stat(self):
+        file_path = os.path.join(self.mnt, "test.txt")
+        
+        stat = os.stat(file_path)
+        
+        self.assertNotEqual(stat.st_mtime, 0)
+        self.assertNotEqual(stat.st_atime, 0)
+        self.assertNotEqual(stat.st_ctime, 0)
 
 
 class TestRev2Content(BaseTestRev2Content):
