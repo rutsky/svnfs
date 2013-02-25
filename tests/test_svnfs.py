@@ -8,6 +8,7 @@ import signal
 import tempfile
 import threading
 import subprocess
+import multiprocessing
 
 # TODO: check Python version and import unittest2 module, if version is less
 # than 2.7
@@ -218,6 +219,39 @@ class TestAllContent(BaseTestAllContent):
         self.assertTrue(ex.strerror.find("Read-only file system") >= 0, 
                         msg="Unexpected exception text: '{0}'".format(ex.strerror))
         self.assertEqual(ex.errno, 30)
+        
+    def test_file_stat(self):
+        file_path = os.path.join(self.mnt, "2", "test.txt")
+        
+        stat = os.stat(file_path)
+        
+        self.assertNotEqual(stat.st_mtime, 0)
+        self.assertNotEqual(stat.st_atime, 0)
+        self.assertNotEqual(stat.st_ctime, 0)
+        
+        self.assertEqual(stat.st_size, len("First change\n"))
+        
+    def test_concurrent_getattr(self):
+        file_path = os.path.join(self.mnt, "2", "test.txt")
+        
+        # Check if stat works
+        stat = os.stat(file_path)
+        self.assertEqual(stat.st_size, len("First change\n"))
+        
+        def call_getattr(file_path):
+            for i in xrange(10000):
+                os.stat(file_path)
+                os.stat(file_path)
+                os.stat(file_path)
+        
+        processes = [multiprocessing.Process(target=call_getattr, args=(file_path,))
+                     for i in xrange(20)]
+        
+        for p in processes:
+            p.start()
+        
+        for p in processes:
+            p.join()
 
     # TODO: test not existing revision
     # TODO: test single revision, and head revision mounting
