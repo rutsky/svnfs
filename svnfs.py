@@ -292,7 +292,7 @@ class SvnFS(Fuse):
         self.roots = {}
         
         if self.revision != 'all':
-            self.rev = svn.fs.youngest_rev(self.fs_ptr) if self.revision == 'head' else svnfs.revision
+            self.rev = svn.fs.youngest_rev(self.fs_ptr) if self.revision == 'head' else self.revision
             self.file_class = SvnFSSingleRevisionFile
         else:
             self.file_class = SvnFSAllRevisionsFile
