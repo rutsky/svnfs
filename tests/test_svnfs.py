@@ -2,7 +2,11 @@
 
 import os
 import sys
+import time
+import shutil
+import signal
 import tempfile
+import threading
 import subprocess
 
 # TODO: check Python version and import unittest2 module, if version is less
@@ -21,10 +25,21 @@ interactive_mnt = "mnt"
 
 def is_mounted(directory):
     with open("/etc/mtab") as f:
-        return f.read().find(" " + os.path.abspath(directory) + " ") >= 0
+        mtab = f.read()
+    return mtab.find(" " + os.path.abspath(directory) + " ") >= 0
+
+
+def wait_mount(directory):
+    while True:
+        if is_mounted(directory):
+            return
+        else:
+            time.sleep(0.001)
 
 
 def umount(directory, lazy=False):
+    assert is_mounted(directory)
+    
     cmd = ["fusermount", "-u"]
     if lazy:
         cmd.append("-z")
@@ -36,7 +51,14 @@ def umount_safe(directory):
     if is_mounted(directory):
         umount(directory)
         if is_mounted(directory):
+            subprocess.call(["fuser", "-m", directory])  # Debug
             umount(directory, lazy=True)
+    
+    assert not is_mounted(directory)
+
+
+def temp_mount_dir():
+    return os.path.abspath(tempfile.mkdtemp(prefix="mnt_", dir=os.curdir))
 
 
 class TestRun(unittest.TestCase):
@@ -47,15 +69,16 @@ class TestRun(unittest.TestCase):
         out, err = p.communicate()
         self.assertEqual(out, "")
         self.assertTrue(err.find("Error") >= 0)
+        self.assertNotEqual(p.returncode, 0)
 
 
 class TestMount(unittest.TestCase):
     def setUp(self):
-        self.mnt = tempfile.mkdtemp(prefix="mnt_")
+        self.mnt = temp_mount_dir()
     
     def tearDown(self):
         umount_safe(self.mnt)
-        os.rmdir(self.mnt)
+        shutil.rmtree(self.mnt)
         
     def test_mount_all(self):
         p = subprocess.Popen([svnfs_script, test_repo, self.mnt],
@@ -65,6 +88,8 @@ class TestMount(unittest.TestCase):
         self.assertEqual(out, "")
         self.assertEqual(err, "")
         self.assertEqual(p.returncode, 0)
+        
+        time.sleep(0.001) # TODO: wait for FS
         
         self.assertEqual(umount(self.mnt), 0)
     
@@ -77,23 +102,92 @@ class TestMount(unittest.TestCase):
         self.assertEqual(out, "")
         self.assertEqual(err, "")
         self.assertEqual(p.returncode, 0)
+
+        time.sleep(0.001) # TODO: wait for FS
         
         self.assertEqual(umount(self.mnt), 0)
 
 
-class TestAllContent(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.mnt = tempfile.mkdtemp(prefix="mnt_")
+class RunInThread(threading.Thread):
+    def __init__(self, run_args, *args, **kwargs):
+        self.wait_sigstop = kwargs.pop("wait_sigstop", False)
         
-        r = subprocess.call([svnfs_script, test_repo, cls.mnt])
-        assert r == 0
+        super(RunInThread, self).__init__(*args, **kwargs)
+        self.run_args = run_args
+        assert len(self.run_args) > 0
+        
+        self.err = None
+        self.out = None
+        
+        self.ready = threading.Event()
+        
+        if self.wait_sigstop:
+            self.old_sigchld_handler = signal.signal(signal.SIGCHLD, self._sigchld_handler)
+        
+    def _sigchld_handler(self, signum, frame):
+        signal.signal(signal.SIGCHLD, self.old_sigchld_handler)
+        os.kill(self.process.pid, signal.SIGCONT)
+        self.ready.set()
     
-    @classmethod
-    def tearDownClass(cls):
-        umount_safe(cls.mnt)
-        os.rmdir(cls.mnt)
+    def run(self):
+        self.process = subprocess.Popen(self.run_args,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        if self.wait_sigstop:
+            self.err, self.out = self.process.communicate()
+            # ready.set() should be called from SIGCHLD handler
+        else:
+            self.ready.set()
+            self.err, self.out = self.process.communicate()
+
+
+class BaseTestContent(unittest.TestCase):
+    def __init__(self, *args, **kwargs):
+        self.svnfs_options = kwargs.pop("svnfs_options", "")
+        super(BaseTestContent, self).__init__(*args, **kwargs)
     
+    def setUp(self):
+        self.mnt = temp_mount_dir()
+        
+        options = "send_sigstop"
+        if self.svnfs_options:
+            options += "," + self.svnfs_options
+        self.mount_thread = RunInThread([svnfs_script, test_repo, self.mnt, 
+                                         "-o", options, "-f"],
+                                        wait_sigstop=True)
+        self.mount_thread.start()
+        while not self.mount_thread.ready.wait(0.001):
+            pass
+    
+    def tearDown(self):
+        umount_safe(self.mnt)
+        self.mount_thread.join()
+        shutil.rmtree(self.mnt)
+        
+        self.assertEqual(self.mount_thread.err, "")
+        self.assertEqual(self.mount_thread.out, "")
+        self.assertEqual(self.mount_thread.process.returncode, 0)
+
+
+class BaseTestAllContent(BaseTestContent):
+    def __init__(self, *args, **kwargs):
+        super(BaseTestAllContent, self).__init__(*args, **kwargs)
+
+
+class BaseTestRev1Content(BaseTestContent):
+    def __init__(self, *args, **kwargs):
+        super(BaseTestRev1Content, self).__init__(*args, 
+                                                 svnfs_options="revision=1", 
+                                                 **kwargs)
+
+
+class BaseTestRev2Content(BaseTestContent):
+    def __init__(self, *args, **kwargs):
+        super(BaseTestRev2Content, self).__init__(*args, 
+                                                 svnfs_options="revision=2", 
+                                                 **kwargs)
+
+class TestAllContent(BaseTestAllContent):
     def test_content(self):
         self.assertTrue(os.path.isdir(os.path.join(self.mnt, "1")))
         self.assertTrue(os.path.isfile(os.path.join(self.mnt, "1", "test.txt")))
@@ -107,7 +201,8 @@ class TestAllContent(unittest.TestCase):
     
     def test_read_only_revs(self):
         with self.assertRaises(IOError) as cm:
-            open(os.path.join(self.mnt, "test"), "w")
+            with open(os.path.join(self.mnt, "test"), "w") as f:
+                pass
         
         ex = cm.exception
         self.assertTrue(ex.strerror.find("Read-only file system") >= 0, 
@@ -116,7 +211,8 @@ class TestAllContent(unittest.TestCase):
     
     def test_read_only_files(self):
         with self.assertRaises(IOError) as cm:
-            open(os.path.join(self.mnt, "2", "newfile"), "w")
+            with open(os.path.join(self.mnt, "2", "newfile"), "w") as f:
+                pass
         
         ex = cm.exception
         self.assertTrue(ex.strerror.find("Read-only file system") >= 0, 
@@ -127,20 +223,7 @@ class TestAllContent(unittest.TestCase):
     # TODO: test single revision, and head revision mounting
 
 
-class TestRev1Content(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.mnt = tempfile.mkdtemp(prefix="mnt_")
-        
-        r = subprocess.call([svnfs_script, test_repo, cls.mnt,
-                             "-o", "revision=1"])
-        assert r == 0
-    
-    @classmethod
-    def tearDownClass(cls):
-        umount_safe(cls.mnt)
-        os.rmdir(cls.mnt)
-    
+class TestRev1Content(BaseTestRev1Content):
     def test_content(self):
         self.assertTrue(os.path.isfile(os.path.join(self.mnt, "test.txt")))
         with open(os.path.join(self.mnt, "test.txt"), "r") as f:
@@ -149,20 +232,7 @@ class TestRev1Content(unittest.TestCase):
         self.assertFalse(os.path.isdir(os.path.join(self.mnt, "2")))
 
 
-class TestRev2Content(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.mnt = tempfile.mkdtemp(prefix="mnt_")
-        
-        r = subprocess.call([svnfs_script, test_repo, cls.mnt,
-                             "-o", "revision=2"])
-        assert r == 0
-    
-    @classmethod
-    def tearDownClass(cls):
-        umount_safe(cls.mnt)
-        os.rmdir(cls.mnt)
-    
+class TestRev2Content(BaseTestRev2Content):
     def test_content(self):
         self.assertTrue(os.path.isfile(os.path.join(self.mnt, "test.txt")))
         with open(os.path.join(self.mnt, "test.txt"), "r") as f:
@@ -170,7 +240,7 @@ class TestRev2Content(unittest.TestCase):
         
         self.assertFalse(os.path.isdir(os.path.join(self.mnt, "2")))
 
-        
+
 def run_tests():
     if not os.path.isdir(test_repo):
         sys.stderr.write("Error: Test repository not found.\n"
