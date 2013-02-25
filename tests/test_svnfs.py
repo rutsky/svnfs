@@ -101,6 +101,10 @@ class TestContent(unittest.TestCase):
                         msg="Unexpected exception text: '{0}'".format(ex.strerror))
         self.assertEqual(ex.errno, 30)
         
+    # TODO: test not existing revision
+    # TODO: test single revision, and head revision mounting
+    # TODO: always check that output doesn't contains exceptions
+        
 def run_tests():
     if not os.path.isdir(test_repo):
         sys.stderr.write("Error: Test repository not found.\n"

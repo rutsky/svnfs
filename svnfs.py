@@ -10,7 +10,7 @@
 #  This program was adapted from xmp.py included with the FUSE Python bindings.
 #
 #  This is a FUSE module using the Python bindings.  It allows you to mount
-#  a local subversion repository filesystem into the host filesystem, read-only.
+#  a local subversion repository file system into the host file system, read-only.
 #  
 #  TODO: - support symlinks
 #        - more efficient reading of files (maybe a cache?)
@@ -25,11 +25,14 @@
 #        - try use statefull files as in xmp.py example
 #        - write tests
 #        - use logging
+#        - check is current way of reporting errors (by throwing exception 
+#          with errno is correct)
 #
-#  USAGE:  - install and load the "fuse" kernel module 
-#          - run "svnfs.py /mnt/wherever -o svnrepo=/var/lib/svn/repodir" or
-#            "svnfs.py /var/lib/svn/repodir /mnt/wherever"
-#          - run "fusermount -u /mnt/wherever" to unmount
+#  USAGE:
+#        - install and load the "fuse" kernel module 
+#        - run "svnfs.py /mnt/wherever -o svnrepo=/var/lib/svn/repodir" or
+#          "svnfs.py /var/lib/svn/repodir /mnt/wherever"
+#        - run "fusermount -u /mnt/wherever" to unmount
 
 import os
 import re
@@ -42,6 +45,7 @@ import traceback
 import functools
 import stat
 import errno
+import inspect
 
 try:
     from collections import OrderedDict
@@ -54,12 +58,16 @@ import threading
 
 import fuse
 fuse.fuse_python_api = (0, 2)
-fuse.feature_assert('has_init')
+fuse.feature_assert('has_init', 'stateful_files')
 from fuse import Fuse
 
 import svn.repos
 import svn.fs
 import svn.core
+
+
+revision_dir_re = re.compile(r"^/(\d+)$")
+file_re = re.compile(r"^/(\d+)(/.*)$")
 
 
 class LimitedSizeDict(OrderedDict):
@@ -90,23 +98,161 @@ def redirect_output(output_file):
     os.dup2(log_fd, 2)
 
 
-def print_caught_exception(function):
+def trace_exceptions(function):
     @functools.wraps(function)
     def wrapper(*args, **kwargs):
         try:
             return function(*args, **kwargs)
+        except ManagedOSError:
+            # Skip exceptions about read only file system
+            raise
         except:
-            sys.stderr.write("print_caught_exception():\n")
-            traceback.print_exc(None, sys.stderr)
+            sys.stderr.write("\n"
+                             "    *** EXCEPTION ***:\n")
+            traceback.print_exc()
+            
+            try:
+                f_file = inspect.getfile(function)
+            #except TypeError:
+            except:
+                f_file = "unknown"
+                
+            try:
+                lines, f_line = inspect.getsourcelines(function)
+            #except IOError:
+            except:
+                lines, f_line = ["<unknown>\n"], "unknown" 
+            
+            sys.stderr.write("\nWhen invoking\n  File \"{file}\", line {line} in {name}\n    {code}".format(
+                name=function.__name__, file=f_file, line=f_line, 
+                code=lines[0]))
+            
+            sys.stderr.write("    ***    END    ***\n"
+                             "\n")
             sys.stderr.flush()
             raise
     return wrapper
 
 
-class SvnFS(Fuse):
-    revision_dir_re = re.compile(r"^/(\d+)$")
-    file_re = re.compile(r"^/(\d+)(/.*)$")
+def is_write_mode(flags):
+    return ((flags & os.O_WRONLY) or
+            (flags & os.O_RDWR) or
+            (flags & os.O_APPEND) or
+            (flags & os.O_CREAT) or
+            (flags & os.O_TRUNC))
 
+
+class ManagedOSError(OSError):
+    pass
+
+def raise_read_only_error(msg=None):
+    if msg is not None:
+        error_msg = msg
+    else:
+        error_msg = "Read-only file system"
+    e = ManagedOSError(error_msg)
+    e.errno = errno.EROFS
+    raise e
+
+
+def raise_no_such_entry_error(msg=None):
+    if msg is not None:
+        error_msg = msg
+    else:
+        error_msg = "No such entry."
+    e = ManagedOSError(error_msg)
+    e.errno = errno.ENOENT
+    raise e
+
+
+class SvnFSFileBase(object):
+    def __init__(self, path, flags, *mode):
+        super(SvnFSFileBase, self).__init__()
+        
+        # TODO: not sure is this needed and what it does
+        self.keep = True
+        self.keep_cache = True
+        self.direct_io = False
+        
+        if is_write_mode(flags):
+            raise_read_only_error("Read-only file system. Can't create '{0}'".format(path))
+    
+    def svnfs_init(self, rev, path):
+        # Revision and path in revision must exists
+        
+        self.rev = rev
+        self.path = path
+
+    @trace_exceptions
+    def read(self, length, offset):
+        return self.svnfs.svnfs_read(self.rev, self.path, length, offset)
+
+    @trace_exceptions
+    def write(self, buf, offset):
+        raise_read_only_error()
+
+    @trace_exceptions
+    def release(self, flags):
+        pass
+
+    @trace_exceptions
+    def _fflush(self):
+        pass
+
+    @trace_exceptions
+    def fsync(self, isfsyncfile):
+        pass
+
+    @trace_exceptions
+    def flush(self):
+        pass
+
+    @trace_exceptions
+    def fgetattr(self):
+        return self.svnfs.svnfs_getattr(self.rev, self.path)
+
+    @trace_exceptions
+    def ftruncate(self, length):
+        raise_read_only_error()
+
+    @trace_exceptions
+    def lock(self, cmd, owner, **kw):
+        return -errno.EOPNOTSUPP
+
+
+class SvnFSAllRevisionsFile(SvnFSFileBase):
+    @trace_exceptions
+    def __init__(self, path, flags, *mode):
+        super(SvnFSAllRevisionsFile, self).__init__(path, flags, *mode)
+        
+        m = file_re.match(path)
+        if not m:
+            raise_no_such_entry_error("Path not found: {0}".format(path))
+            
+        rev = int(m.group(1))
+        if rev > svn.fs.youngest_rev(self.svnfs.fs_ptr):
+            raise_no_such_entry_error("Nonexistent (yet) revision {0}".format(rev))
+         
+        svn_path = m.group(2)
+        
+        if not self.svnfs.svnfs_file_exists(rev, svn_path):
+            raise_no_such_entry_error("Path not found in {0} revision: {1}".format(rev, svn_path))
+        
+        self.svnfs_init(rev, svn_path)
+
+
+class SvnFSSingleRevisionFile(SvnFSFileBase):
+    @trace_exceptions
+    def __init__(self, path, flags, *mode):
+        super(SvnFSSingleRevisionFile, self).__init__(path, flags, *mode)
+
+        if not self.svnfs.svnfs_file_exists(self.svnfs.rev, path):
+            raise_no_such_entry_error("Path not found in {0} revision: {1}".format(self.svnfs.rev, path))
+        
+        self.svnfs_init(self.svnfs.rev, path)
+
+
+class SvnFS(Fuse):
     def __init__(self, *args, **kw):
         Fuse.__init__(self, *args, **kw)
         
@@ -118,7 +264,7 @@ class SvnFS(Fuse):
         self.logfile = None
     
     # TODO: exceptions here not handled properly, so output them manually
-    @print_caught_exception
+    @trace_exceptions
     def fsinit(self):
         # Called only in daemon mode?
     
@@ -142,6 +288,10 @@ class SvnFS(Fuse):
         
         if self.revision != 'all':
             self.rev = svn.fs.youngest_rev(self.fs_ptr) if self.revision == 'head' else svnfs.revision
+            self.file_class = SvnFSSingleRevisionFile
+        else:
+            self.file_class = SvnFSAllRevisionsFile
+        self.file_class.svnfs = self
 
         # revision -> time
         self.revision_creation_time_cache = {}
@@ -149,9 +299,14 @@ class SvnFS(Fuse):
         # (rev, path) -> [stream, offset, lock]
         self.file_stream_cache = LimitedSizeDict(size_limit=100)
         
+    # TODO?
+    #def access(self, path, mode):
+    #    if not os.access("." + path, mode):
+    #        return -EACCES
+        
     def __get_file_stream(self, rev, path):
         return self.file_stream_cache.setdefault((rev, path),
-            [svn.fs.file_contents(self.__get_root(rev), path), 
+            [svn.fs.file_contents(self.svnfs_get_root(rev), path), 
              0,
              threading.RLock()])
     
@@ -163,15 +318,21 @@ class SvnFS(Fuse):
     def __revision_creation_time(self, rev):
         return self.revision_creation_time_cache.setdefault(rev, self.__revision_creation_time_impl(rev))
     
-    def __get_root(self, rev):
+    def svnfs_get_root(self, rev):
         return self.roots.setdefault(rev, svn.fs.revision_root(self.fs_ptr, rev))
+    
+    def svnfs_file_exists(self, rev, svn_path):
+        kind = svn.fs.check_path(self.svnfs_get_root(rev), svn_path)
+        return kind != svn.core.svn_node_none
 
-    def __getattr_svn(self, root, path):
+    def svnfs_getattr(self, rev, path):
         st = fuse.Stat()
+        
+        root = self.svnfs_get_root(rev)
 
         kind = svn.fs.check_path(root, path)
         if kind == svn.core.svn_node_none:
-            e = OSError("Nothing found at %s " % path)
+            e = OSError("Nothing found at {0}".format(path))
             e.errno = errno.ENOENT
             raise e
 
@@ -249,24 +410,24 @@ class SvnFS(Fuse):
             if path == "/":
                 return self.__getattr_root()
             
-            m = self.revision_dir_re.match(path)
+            m = revision_dir_re.match(path)
             if m:
                 return self.__getattr_rev(int(m.group(1)))
         
-            m = self.file_re.match(path)
+            m = file_re.match(path)
             if m:
-                return self.__getattr_svn(self.__get_root(int(m.group(1))), m.group(2))
+                return self.svnfs_getattr(int(m.group(1)), m.group(2))
         else:
-            return self.__getattr_svn(self.__get_root(self.rev), path)
+            return self.svnfs_getattr(self.rev, path)
         
-        e = OSError("Nothing found at %s " % path)
+        e = OSError("Nothing found at {0}".format(path))
         e.errno = errno.ENOENT
         raise e
 
     # TODO: support this
-    @print_caught_exception
+    @trace_exceptions
     def readlink(self, path):
-        e = OSError("Not supported yet, readlink on %s " % path)
+        e = OSError("Not supported yet, readlink on {0}".format(path))
         e.errno = errno.ENOENT
         raise e
 
@@ -280,110 +441,79 @@ class SvnFS(Fuse):
                 rev = svn.fs.youngest_rev(self.fs_ptr)
                 return map(str, range(1, rev + 1))
 
-            m = self.revision_dir_re.match(path)
+            m = revision_dir_re.match(path)
             if m:
-                return self.__get_files_list_svn(self.__get_root(int(m.group(1))), "/")
+                return self.__get_files_list_svn(self.svnfs_get_root(int(m.group(1))), "/")
             
-            m = self.file_re.match(path)
+            m = file_re.match(path)
             if m:
-                return self.__get_files_list_svn(self.__get_root(int(m.group(1))), m.group(2))
+                return self.__get_files_list_svn(self.svnfs_get_root(int(m.group(1))), m.group(2))
         else:
-            return self.__get_files_list_svn(self.__get_root(self.rev), path)
+            return self.__get_files_list_svn(self.svnfs_get_root(self.rev), path)
 
-        e = OSError("Nothing found at %s " % path)
+        e = OSError("Nothing found at {0}".format(path))
         e.errno = errno.ENOENT
         raise e
 
-    @print_caught_exception
+    @trace_exceptions
     def getdir(self, path):
         return map(lambda x: (x, 0), self.__get_files_list(path))
 
-    @print_caught_exception
+    @trace_exceptions
     def readdir(self, path, offset):
         # TODO: offset?
         for f in  self.__get_files_list(path) + [".", ".."]:
             yield fuse.Direntry(f)
 
-    @print_caught_exception
+    @trace_exceptions
     def unlink(self, path):
-        e = OSError("Read-only view, can't unlink %s " % path)
-        e.errno = errno.EROFS
-        raise e
+        raise_read_only_error("Read-only file system, can't unlink {0}".format(path))
 
-    @print_caught_exception
+    @trace_exceptions
     def rmdir(self, path):
-        e = OSError("Read-only view, can't rmdir %s " % path)
-        e.errno = errno.EROFS
-        raise e
-
-    @print_caught_exception
+        raise_read_only_error("Read-only file system, can't rmdir {0}".format(path))
+        
+    @trace_exceptions
     def symlink(self, path, path1):
-        e = OSError("Read-only view, can't symlink %s " % path)
-        e.errno = errno.EROFS
-        raise e
-
-    @print_caught_exception
+        raise_read_only_error("Read-only file system, can't symlink {0}".format(path))
+        
+    @trace_exceptions
     def rename(self, path, path1):
-        e = OSError("Read-only view, can't rename %s " % path)
-        e.errno = errno.EROFS
-        raise e
+        raise_read_only_error("Read-only file system, can't rename {0}".format(path))
 
-    @print_caught_exception
+    @trace_exceptions
     def link(self, path, path1):
-        e = OSError("Read-only view, can't link %s " % path)
-        e.errno = errno.EROFS
-        raise e
+        raise_read_only_error("Read-only file system, can't link {0}".format(path))
 
-    @print_caught_exception
+    @trace_exceptions
     def chmod(self, path, mode):
-        e = OSError("Read-only view, can't chmod %s " % path)
-        e.errno = errno.EROFS
-        raise e
+        raise_read_only_error("Read-only file system, can't chmod {0}".format(path))
 
-    @print_caught_exception
+    @trace_exceptions
     def chown(self, path, user, group):
-        e = OSError("Read-only view, can't chown %s " % path)
-        e.errno = errno.EROFS
-        raise e
+        raise_read_only_error("Read-only file system, can't chown {0}".format(path))
 
-    @print_caught_exception
+    @trace_exceptions
     def truncate(self, path, size):
-        e = OSError("Read-only view, can't truncate %s " % path)
-        e.errno = errno.EROFS
-        raise e
+        raise_read_only_error("Read-only file system, can't truncate {0}".format(path))
 
-    @print_caught_exception
+    @trace_exceptions
     def mknod(self, path, mode, dev):
-        e = OSError("Read-only view, can't mknod %s " % path)
-        e.errno = errno.EROFS
-        raise e
+        raise_read_only_error("Read-only view, can't mknod {0}".format(path))
 
-    @print_caught_exception
+    @trace_exceptions
     def mkdir(self, path, mode):
-        e = OSError("Read-only view, can't mkdir %s " % path)
-        e.errno = errno.EROFS
-        raise e
+        raise_read_only_error("Read-only view, can't mkdir {0}".format(path))
 
-    @print_caught_exception
+    @trace_exceptions
     def utime(self, path, times):
         return os.utime(path, times)
 
-    @print_caught_exception
-    def open(self, path, flags):
-        # TODO: check existence?
-        if ((flags & os.O_WRONLY) or (flags & os.O_RDWR) or (flags & os.O_APPEND) or \
-           (flags & os.O_CREAT) or (flags & os.O_TRUNC) or (flags & os.O_TRUNC)):
-            e = OSError("Read-only view, can't create %s " % path)
-            e.errno = errno.EROFS
-            raise e
-
-        return 0
-    
-    def __read_svn(self, rev, path, length, offset):
-        root = self.__get_root(rev)
+    def svnfs_read(self, rev, path, length, offset):
+        root = self.svnfs_get_root(rev)
         kind = svn.fs.check_path(root, path)
         if kind != svn.core.svn_node_file:
-            e = OSError("Can't read a non-file %s" % path)
+            e = OSError("Can't read a non-file {0}".format(path))
             e.errno = errno.ENOENT
             raise e
 
@@ -407,30 +537,7 @@ class SvnFS(Fuse):
             
             return data
 
-    @print_caught_exception
-    def read(self, path, length, offset):
-        if self.revision == 'all':
-            m = self.file_re.match(path)
-            if m:
-                return self.__read_svn(int(m.group(1)), m.group(2), length, offset)
-        else:
-            return self.__read_svn(self.rev, path, length, offset)
-        
-        e = OSError("Nothing found at %s " % path)
-        e.errno = errno.ENOENT
-        raise e
-    
-    @print_caught_exception
-    def write(self, path, buf, off):
-        e = OSError("Read-only view, can't mkdir %s " % path)
-        e.errno = errno.EROFS
-        raise e
-    
-    @print_caught_exception
-    def release(self, path, flags):
-        return 0
-
-    @print_caught_exception
+    @trace_exceptions
     def statfs(self):
         st = fuse.StatVfs()
         
@@ -442,10 +549,6 @@ class SvnFS(Fuse):
         st.f_namelen = 80 # TODO
         
         return st
-
-    @print_caught_exception
-    def fsync(self, path, isfsyncfile):
-        return 0
 
 if __name__ == '__main__':
     usage = ("Usage: %prog svn_repository_dir mountpoint [options]\n"
@@ -516,6 +619,7 @@ if __name__ == '__main__':
             svnfs.revision = svnfs.revision.lower()
             try:
                 svnfs.revision = int(svnfs.revision)
+                
             except ValueError:
                 if svnfs.revision not in ['all', 'head']:
                     sys.stderr.write("Error: Invalid revision specification. Should be number, 'all' or 'HEAD'.\n")
