@@ -582,7 +582,7 @@ def main():
     if svnfs.logfile is not None:
         svnfs.logfile = os.path.abspath(svnfs.logfile)
         redirect_output(svnfs.logfile)
-        print "Log opened at {0}".format(str(datetime.datetime.now()))
+        sys.stdout.write("Log opened at {0}\n".format(str(datetime.datetime.now())))
         sys.stdout.flush()
     
     if svnfs.parser.fuse_args.mount_expected():
