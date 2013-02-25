@@ -10,13 +10,19 @@ import subprocess
 import unittest
 import argparse
 
+
+# TODO: always check that output doesn't contains exceptions
+# TODO: test simultaneous read of big file from many threads
+
 test_repo = "test_repo"
 svnfs_script = "../svnfs.py"
 interactive_mnt = "mnt"
 
+
 def is_mounted(directory):
     with open("/etc/mtab") as f:
         return f.read().find(" " + os.path.abspath(directory) + " ") >= 0
+
 
 def umount(directory, lazy=False):
     cmd = ["fusermount", "-u"]
@@ -25,11 +31,13 @@ def umount(directory, lazy=False):
     cmd.append(directory)
     return subprocess.call(cmd)
 
+
 def umount_safe(directory):
     if is_mounted(directory):
         umount(directory)
         if is_mounted(directory):
             umount(directory, lazy=True)
+
 
 class TestRun(unittest.TestCase):
     def test_wo_args(self):
@@ -39,7 +47,8 @@ class TestRun(unittest.TestCase):
         out, err = p.communicate()
         self.assertEqual(out, "")
         self.assertTrue(err.find("Error") >= 0)
-    
+
+
 class TestMount(unittest.TestCase):
     def setUp(self):
         self.mnt = tempfile.mkdtemp(prefix="mnt_")
@@ -70,6 +79,7 @@ class TestMount(unittest.TestCase):
         self.assertEqual(p.returncode, 0)
         
         self.assertEqual(umount(self.mnt), 0)
+
 
 class TestAllContent(unittest.TestCase):
     @classmethod
@@ -115,7 +125,7 @@ class TestAllContent(unittest.TestCase):
 
     # TODO: test not existing revision
     # TODO: test single revision, and head revision mounting
-    # TODO: always check that output doesn't contains exceptions
+
 
 class TestRev1Content(unittest.TestCase):
     @classmethod
@@ -138,6 +148,7 @@ class TestRev1Content(unittest.TestCase):
         
         self.assertFalse(os.path.isdir(os.path.join(self.mnt, "2")))
 
+
 class TestRev2Content(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -158,6 +169,7 @@ class TestRev2Content(unittest.TestCase):
             self.assertEqual(f.read(), "First change\n")
         
         self.assertFalse(os.path.isdir(os.path.join(self.mnt, "2")))
+
         
 def run_tests():
     if not os.path.isdir(test_repo):
@@ -166,6 +178,7 @@ def run_tests():
         sys.exit(1)
 
     unittest.main()
+
 
 def run_mount():
     """Mount test repository for interactive testing"""
@@ -183,6 +196,7 @@ def run_mount():
            "To unmount run:\n"
            "  fusermount -u {mnt}").format(mnt=interactive_mnt))
 
+
 def main():
     parser = argparse.ArgumentParser(description='Test runner for SVNFS')
     parser.add_argument('--run-mount', action='store_true',
@@ -193,6 +207,7 @@ def main():
         run_mount()
     else:
         run_tests()
+
 
 if __name__ == '__main__':
     main()
