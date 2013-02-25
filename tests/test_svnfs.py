@@ -178,7 +178,7 @@ class RunInThread(threading.Thread):
         signal.signal(signal.SIGCHLD, self.old_sigchld_handler)
         
         # to be sure, that FS is up
-        os.stat(self.mnt)
+        #os.stat(self.mnt) # causes FUSE failures: Software caused connection abort
         
         # TODO: invoking umount just after mounting leads to "Device or resource busy" error
         time.sleep(0.05)
