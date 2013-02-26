@@ -11,6 +11,8 @@ try:
 except ImportError:
     import dummy_threading as threading
 
+from contextlib import contextmanager
+
 class RWLock:
     """
     Classic implementation of reader-writer lock with preference to writers.
@@ -85,3 +87,15 @@ class RWLock:
                     t -= 1
         finally:
             self.mutex.release()
+
+    @contextmanager
+    def read_lock(self):
+        self.reader_enters()
+        yield
+        self.reader_leaves()
+
+    @contextmanager
+    def write_lock(self):
+        self.writer_enters()
+        yield
+        self.writer_leaves()
