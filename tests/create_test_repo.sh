@@ -54,4 +54,8 @@ svn copy test.txt a/b/test.txt
 svn copy test.txt a/b/test2.txt
 svn ci a -m"Copy test.txt"
 
+echo "More files" > file
+svn add file
+svn ci file -m "Add more files"
+
 popd > /dev/null

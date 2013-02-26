@@ -15,6 +15,10 @@ import multiprocessing
 import unittest
 import argparse
 
+import svn
+import svn.fs
+import svn.repos
+
 
 # TODO: deadlock: while true; do python -u -m unittest -v test_svnfs; sleep 1; done
 # TODO: test simultaneous read of big file from many threads
@@ -292,7 +296,7 @@ class TestAllContent(BaseTestAllContent):
         
         for p in processes:
             p.join()
-
+            
     # TODO: test not existing revision
     # TODO: test single revision, and head revision mounting
 
@@ -331,6 +335,24 @@ def run_tests():
         sys.exit(1)
 
     unittest.main()
+
+
+class TestSVN(unittest.TestCase):
+    def setUp(self):
+        self.fs_ptr = svn.repos.svn_repos_fs(svn.repos.svn_repos_open(svn.core.svn_path_canonicalize(test_repo)))
+    
+    def test_revision_id(self):
+        def node_id(rev, path):
+            root = svn.fs.revision_root(self.fs_ptr, rev)
+            node_id = svn.fs.node_id(root, path)
+            return svn.fs.unparse_id(node_id)
+        
+        self.assertTrue(isinstance(node_id(1, "/test.txt"), basestring))
+        self.assertEqual(node_id(1, "/test.txt"), node_id(1, "/test.txt"))
+        self.assertEqual(node_id(2, "/test.txt"), node_id(3, "/test.txt"))
+        self.assertNotEqual(node_id(2, "/test.txt"), node_id(2, "/"))
+        self.assertNotEqual(node_id(2, "/test.txt"), node_id(4, "/a/test.txt"))
+        self.assertNotEqual(node_id(2, "/test.txt"), node_id(5, "/file"))
 
 
 def run_mount():
