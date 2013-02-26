@@ -149,7 +149,12 @@ class RunInThread(threading.Thread):
     def _sigchld_handler(self, signum, frame):
         try:
             signal.signal(signal.SIGCHLD, self.old_sigchld_handler)
-            os.kill(self.process.pid, signal.SIGCONT)
+            try:
+                os.kill(self.process.pid, signal.SIGCONT)
+            except OSError:
+                # Process probably dead. It should be seen in 
+                # it's return code or output.
+                pass
         finally:
             self.ready.set()
     
