@@ -51,11 +51,6 @@ import pickle
 import tempfile
 import shutil
 
-try:
-    from collections import OrderedDict
-except ImportError:
-    from OrderedDict import OrderedDict
-
 # Import threading modules. TODO: Otherwise program prints on exit:
 # Exception KeyError: KeyError(139848519223040,) in <module 'threading' from '/usr/lib64/python2.7/threading.pyc'> ignored
 import threading
@@ -74,23 +69,6 @@ import synch
 
 revision_dir_re = re.compile(r"^/(\d+)$")
 file_re = re.compile(r"^/(\d+)(/.*)$")
-
-
-class LimitedSizeDict(OrderedDict):
-    """http://stackoverflow.com/questions/2437617/limiting-the-size-of-a-python-dictionary"""
-    def __init__(self, *args, **kwds):
-        self.size_limit = kwds.pop("size_limit", None)
-        OrderedDict.__init__(self, *args, **kwds)
-        self._check_size_limit()
-
-    def __setitem__(self, key, value):
-        OrderedDict.__setitem__(self, key, value)
-        self._check_size_limit()
-
-    def _check_size_limit(self):
-        if self.size_limit is not None:
-            while len(self) > self.size_limit:
-                self.popitem(last=False)
 
 
 def redirect_output(output_file):
@@ -317,9 +295,6 @@ class SvnFS(Fuse):
         # revision -> time
         self.revision_creation_time_cache = {}
         
-        # (rev, path) -> [stream, offset, lock]
-        self.file_stream_cache = LimitedSizeDict(size_limit=100)
-        
         # Initialize cache
         if not os.path.isdir(self.cache_dir):
             os.makedirs(self.cache_dir)
@@ -342,12 +317,6 @@ class SvnFS(Fuse):
     #    if not os.access("." + path, mode):
     #        return -EACCES
         
-    def __get_file_stream(self, rev, path):
-        return self.file_stream_cache.setdefault((rev, path),
-            [svn.fs.file_contents(self.svnfs_get_root(rev), path), 
-             0,
-             threading.RLock()])
-    
     def __revision_creation_time_impl(self, rev):
         date = svn.fs.revision_prop(self.fs_ptr, rev,
             svn.core.SVN_PROP_REVISION_DATE)
