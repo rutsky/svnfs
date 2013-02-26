@@ -26,6 +26,9 @@ test_repo = "test_repo"
 svnfs_script = "../svnfs.py"
 interactive_mnt = "mnt"
 
+sys.path.append("..")
+import svnfs
+
 
 def is_mounted(directory):
     with open("/etc/mtab") as f:
@@ -352,6 +355,14 @@ class TestSVN(unittest.TestCase):
         self.assertNotEqual(node_id(2, "/test.txt"), node_id(2, "/"))
         self.assertNotEqual(node_id(2, "/test.txt"), node_id(4, "/a/test.txt"))
         self.assertNotEqual(node_id(2, "/test.txt"), node_id(5, "/file"))
+
+
+class TestRevisionEncoding(unittest.TestCase):
+    def test_main(self):
+        node_revision_id = '0-1.0.r2/45'
+        encoded = svnfs.encode_node_revision_id(node_revision_id)
+        self.assertFalse(encoded.find("/") >= 0)
+        self.assertFalse(encoded.find("..") >= 0)
 
 
 def run_mount():
