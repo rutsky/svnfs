@@ -44,4 +44,14 @@ echo "First change" > test.txt
 svn ci test.txt -m "First change"
 svn propset svn:date --revprop -r 2 2013-00-01T00:00:00.000000Z
 
+mkdir -p a/b/c
+mkdir -p a/b1/c1
+svn add a
+svn ci a -m "Add empty directories"
+
+svn copy test.txt a/test.txt
+svn copy test.txt a/b/test.txt
+svn copy test.txt a/b/test2.txt
+svn ci a -m"Copy test.txt"
+
 popd > /dev/null
