@@ -19,7 +19,6 @@ import svn
 import svn.fs
 import svn.repos
 
-
 # TODO: deadlock: while true; do python -u -m unittest -v test_svnfs; sleep 1; done
 # TODO: test simultaneous read of big file from many threads
 

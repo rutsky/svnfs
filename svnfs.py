@@ -154,6 +154,85 @@ def encode_node_revision_id(node_revision_id):
     return node_revision_id.encode("hex")
 
 
+class FilesCache(object):
+    cache_version = 1
+    
+    def __init__(self, cache_dir):
+        self.cache_dir = cache_dir
+        
+        if not os.path.isdir(self.cache_dir):
+            os.makedirs(self.cache_dir)
+        
+        self.cache_db = shelve.open(os.path.join(self.cache_dir, "db"), protocol=pickle.HIGHEST_PROTOCOL)
+        if "version" not in self.cache_db:
+            self.cache_db["version"] = self.cache_version
+        elif self.cache_db["version"] != self.cache_version:
+            raise RuntimeError("Cache version mismatch")
+        
+        self.cache_db.sync()
+        
+        self.cache_db_lock = synch.RWLock()
+        
+        self.cache_files_dir = os.path.join(self.cache_dir, "cache")
+        self.cache_temp_dir = os.path.join(self.cache_dir, "tmp")
+        
+        if not os.path.isdir(self.cache_files_dir):
+            os.mkdir(self.cache_files_dir)
+        if not os.path.isdir(self.cache_temp_dir):
+            os.mkdir(self.cache_temp_dir)
+            
+        assert self.check_integrity()
+            
+    def check_integrity(self):
+        with self.cache_db_lock.read_lock():
+            dir_cache_files = os.listdir(self.cache_files_dir)
+            db_cache_files = []
+            for key, value in self.cache_db.iteritems():
+                if key != "version":
+                    db_cache_files.append(value["cache_file"])
+
+            return set(dir_cache_files) == set(db_cache_files)
+    
+    def fix_integrity(self):
+        """Check non-existing or not-registered items and removes them"""
+        # TODO
+        pass
+    
+    def build_db_from_cache(self):
+        """Built cache database from existing files cache"""
+        # TODO
+        pass
+    
+    def get_file_path(self, node_revision_id):
+        with self.cache_db_lock.read_lock():
+            if node_revision_id in self.cache_db:
+                cache_file = self.cache_db[node_revision_id]["cache_file"]
+                return os.path.join(self.cache_files_dir, cache_file)
+            else:
+                return None
+    
+    def put_file(self, node_revision_id, temp_file_path):
+        with self.cache_db_lock.write_lock():
+            if node_revision_id not in self.cache_db:
+                # File still not cached
+                cache_file = encode_node_revision_id(node_revision_id)
+                full_path = os.path.join(self.cache_files_dir, cache_file)
+                    
+                shutil.move(temp_file_path, full_path)
+                    
+                self.cache_db[node_revision_id] = dict(cache_file=cache_file)
+                self.cache_db.sync()
+                
+                return full_path
+            else:
+                # Someone else cached file
+                
+                os.remove(temp_file_path)
+                
+                cache_file = self.cache_db[node_revision_id]["cache_file"]
+                return os.path.join(self.cache_files_dir, cache_file)
+
+
 # TODO: cache files by Subversion node revision id.
 # TODO: cache opened file descriptors (updating file cache)
 # TODO: use one writer multiple reader locks for accessing shelved storage of node revision id -> cache file
@@ -295,22 +374,7 @@ class SvnFS(Fuse):
         # revision -> time
         self.revision_creation_time_cache = {}
         
-        # Initialize cache
-        if not os.path.isdir(self.cache_dir):
-            os.makedirs(self.cache_dir)
-        
-        # TODO: add versioning
-        self.cache_db = shelve.open(os.path.join(self.cache_dir, "db"), protocol=pickle.HIGHEST_PROTOCOL)
-        self.cache_db.sync()
-        self.cache_db_lock = synch.RWLock()
-        
-        self.cache_files_dir = os.path.join(self.cache_dir, "cache")
-        self.cache_temp_dir = os.path.join(self.cache_dir, "tmp")
-        
-        if not os.path.isdir(self.cache_files_dir):
-            os.mkdir(self.cache_files_dir)
-        if not os.path.isdir(self.cache_temp_dir):
-            os.mkdir(self.cache_temp_dir)
+        self.files_cache = FilesCache(self.cache_dir)
         
     # TODO?
     #def access(self, path, mode):
@@ -522,16 +586,12 @@ class SvnFS(Fuse):
     def svnfs_read(self, rev, path, length, offset):
         node_revision_id = self.svnfs_node_revision_id(rev, path)
         
-        with self.cache_db_lock.read_lock():
-            if node_revision_id in self.cache_db:
-                cache_file = self.cache_db[node_revision_id]["cache_file"]
-            else:
-                cache_file = None
+        cache_file = self.files_cache.get_file_path(node_revision_id)
         
         if not cache_file:
             # File not cached - get it and cache it
             src_stream = svn.fs.file_contents(self.svnfs_get_root(rev), path)
-            with tempfile.NamedTemporaryFile(dir=self.cache_temp_dir, delete=False) as destf:
+            with tempfile.NamedTemporaryFile(dir=self.files_cache.cache_temp_dir, delete=False) as destf:
                 temp_file_name = destf.name
                 
                 bs = 4096 * 1024
@@ -543,18 +603,10 @@ class SvnFS(Fuse):
 
             svn.core.svn_stream_close(src_stream)
             
-            with self.cache_db_lock.write_lock():
-                if node_revision_id not in self.cache_db:
-                    # File still not cached
-                    cache_file = encode_node_revision_id(node_revision_id)
-                    
-                    shutil.move(temp_file_name, os.path.join(self.cache_files_dir, cache_file))
-                    
-                    self.cache_db[node_revision_id] = dict(cache_file=cache_file)
-                    self.cache_db.sync()
+            cache_file = self.files_cache.put_file(node_revision_id, temp_file_name)
 
         # File contents already cached
-        with open(os.path.join(self.cache_files_dir, cache_file), "rb") as f:
+        with open(cache_file, "rb") as f:
             f.seek(offset)
             return f.read(length)
 
