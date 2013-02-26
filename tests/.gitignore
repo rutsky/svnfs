@@ -1,3 +1,6 @@
 /test_repo
 /test_wc
 /mnt*
+/cache
+/tmp
+/db
