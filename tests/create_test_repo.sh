@@ -2,6 +2,9 @@
 
 set -e
 
+# TODO: create repository using libsvn API. Current implementation is slow 
+# (on Gentto) and buggy (svn ls, svn log don't work).
+
 TESTS=`pwd`
 REPO=test_repo
 WC=test_wc
