@@ -13,7 +13,6 @@
 #  a local subversion repository file system into the host file system, read-only.
 #  
 #  TODO: - support symlinks
-#        - more efficient reading of files (maybe a cache?)
 #        - support following HEAD as it moves, or pegging to a revision
 #          (right now, we're pegged to youngest_rev when we start)
 #        - support some kind of "magic" meta syntax, i.e. "cat trunk@@log", a-la
@@ -22,11 +21,11 @@
 #        - work out a better way to represent inodes than binascii.crc32()
 #
 #  bob TODO:
-#        - try use statefull files as in xmp.py example
-#        - write tests
 #        - use logging
 #        - check is current way of reporting errors (by throwing exception 
 #          with errno is correct)
+#        - don't read whole file on first read - implement opened streams  
+#          storing and caching
 #
 #  USAGE:
 #        - install and load the "fuse" kernel module 
