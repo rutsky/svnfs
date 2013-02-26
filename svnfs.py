@@ -238,10 +238,6 @@ class FilesCache(object):
                 return os.path.join(self.cache_files_dir, cache_file)
 
 
-# TODO: cache files by Subversion node revision id.
-# TODO: cache opened file descriptors (updating file cache)
-# TODO: use one writer multiple reader locks for accessing shelved storage of node revision id -> cache file
-
 class SvnFSFileBase(object):
     def __init__(self, path, flags, *mode):
         super(SvnFSFileBase, self).__init__()
