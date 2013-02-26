@@ -2,7 +2,7 @@
 #
 #  Copyright (C) 2001  Jeff Epler  <jepler@unpythonic.dhs.org>
 #  Copyright (C) 2005  Daniel Patterson  <danpat@danpat.net>
-#  Copyright (C) 2013  Vladimir.Rutsky  <rutsky.vladimir@gmail.com>
+#  Copyright (C) 2013  Vladimir Rutsky  <rutsky.vladimir@gmail.com>
 #
 #  This program can be distributed under the terms of the GNU GPL.
 #  See the file COPYING.
