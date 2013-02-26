@@ -325,6 +325,7 @@ class SvnFS(Fuse):
         if not os.path.isdir(self.cache_dir):
             os.makedirs(self.cache_dir)
         
+        # TODO: add versioning
         self.cache_db = shelve.open(os.path.join(self.cache_dir, "db"), protocol=pickle.HIGHEST_PROTOCOL)
         self.cache_db.sync()
         self.cache_db_lock = synch.RWLock()
