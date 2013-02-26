@@ -47,6 +47,10 @@ import functools
 import stat
 import errno
 import inspect
+import shelve
+import pickle
+import tempfile
+import shutil
 
 try:
     from collections import OrderedDict
@@ -65,6 +69,8 @@ from fuse import Fuse
 import svn.repos
 import svn.fs
 import svn.core
+
+import synch
 
 
 revision_dir_re = re.compile(r"^/(\d+)$")
@@ -166,6 +172,15 @@ def raise_no_such_entry_error(msg=None):
     raise e
 
 
+def encode_node_revision_id(node_revision_id):
+    """Encode node revision id string correct file name"""
+    return node_revision_id.encode("hex")
+
+
+# TODO: cache files by Subversion node revision id.
+# TODO: cache opened file descriptors (updating file cache)
+# TODO: use one writer multiple reader locks for accessing shelved storage of node revision id -> cache file
+
 class SvnFSFileBase(object):
     def __init__(self, path, flags, *mode):
         super(SvnFSFileBase, self).__init__()
@@ -183,7 +198,7 @@ class SvnFSFileBase(object):
         
         self.rev = rev
         self.path = path
-
+        
     @trace_exceptions
     def read(self, length, offset):
         return self.svnfs.svnfs_read(self.rev, self.path, length, offset)
@@ -262,8 +277,10 @@ class SvnFS(Fuse):
         
         self.uid = None
         self.gid = None
+        
         self.logfile = None
         self.send_sigstop = None
+        self.cache_dir = None
     
     # TODO: exceptions here not handled properly, so output them manually
     @trace_exceptions
@@ -304,6 +321,22 @@ class SvnFS(Fuse):
         # (rev, path) -> [stream, offset, lock]
         self.file_stream_cache = LimitedSizeDict(size_limit=100)
         
+        # Initialize cache
+        if not os.path.isdir(self.cache_dir):
+            os.makedirs(self.cache_dir)
+        
+        self.cache_db = shelve.open(os.path.join(self.cache_dir, "db"), protocol=pickle.HIGHEST_PROTOCOL)
+        self.cache_db.sync()
+        self.cache_db_lock = synch.RWLock()
+        
+        self.cache_files_dir = os.path.join(self.cache_dir, "cache")
+        self.cache_temp_dir = os.path.join(self.cache_dir, "tmp")
+        
+        if not os.path.isdir(self.cache_files_dir):
+            os.mkdir(self.cache_files_dir)
+        if not os.path.isdir(self.cache_temp_dir):
+            os.mkdir(self.cache_temp_dir)
+        
     # TODO?
     #def access(self, path, mode):
     #    if not os.access("." + path, mode):
@@ -329,6 +362,9 @@ class SvnFS(Fuse):
     def svnfs_file_exists(self, rev, svn_path):
         kind = svn.fs.check_path(self.svnfs_get_root(rev), svn_path)
         return kind != svn.core.svn_node_none
+    
+    def svnfs_node_revision_id(self, rev, path):
+        return svn.fs.unparse_id(svn.fs.node_id(self.svnfs_get_root(rev), path))
 
     def svnfs_getattr(self, rev, path):
         st = fuse.Stat()
@@ -515,32 +551,43 @@ class SvnFS(Fuse):
         return os.utime(path, times)
 
     def svnfs_read(self, rev, path, length, offset):
-        root = self.svnfs_get_root(rev)
-        kind = svn.fs.check_path(root, path)
-        if kind != svn.core.svn_node_file:
-            e = OSError("Can't read a non-file {0}".format(path))
-            e.errno = errno.ENOENT
-            raise e
+        node_revision_id = self.svnfs_node_revision_id(rev, path)
+        
+        with self.cache_db_lock.read_lock():
+            if node_revision_id in self.cache_db:
+                cache_file = self.cache_db[node_revision_id]["cache_file"]
+            else:
+                cache_file = None
+        
+        if not cache_file:
+            # File not cached - get it and cache it
+            src_stream = svn.fs.file_contents(self.svnfs_get_root(rev), path)
+            with tempfile.NamedTemporaryFile(dir=self.cache_temp_dir, delete=False) as destf:
+                temp_file_name = destf.name
+                
+                bs = 4096 * 1024
+                while True:
+                    block = svn.core.svn_stream_read(src_stream, bs)
+                    if len(block) == 0:
+                        break
+                    destf.write(block)
 
-        stream_offset_lock = self.__get_file_stream(rev, path)
-        with stream_offset_lock[2]:
-            if stream_offset_lock[1] > offset:
-                # TODO: log
-                sys.stdout.write("Cache miss for r{0} '{1}' offset={2} length={3}\n".format(rev, path, offset, length))
-                sys.stdout.flush()
+            svn.core.svn_stream_close(src_stream)
+            
+            with self.cache_db_lock.write_lock():
+                if node_revision_id not in self.cache_db:
+                    # File still not cached
+                    cache_file = encode_node_revision_id(node_revision_id)
+                    
+                    shutil.move(temp_file_name, os.path.join(self.cache_files_dir, cache_file))
+                    
+                    self.cache_db[node_revision_id] = dict(cache_file=cache_file)
+                    self.cache_db.sync()
 
-                stream_offset_lock[0] = svn.fs.file_contents(root, path)
-                stream_offset_lock[1] = 0
-            
-            seek_cur = int(offset) - stream_offset_lock[1]
-            if seek_cur > 0:
-                # Skip not needed
-                svn.core.svn_stream_read(stream_offset_lock[0], seek_cur)
-            data = svn.core.svn_stream_read(stream_offset_lock[0], length)
-            
-            stream_offset_lock[1] += seek_cur + length
-            
-            return data
+        # File contents already cached
+        with open(os.path.join(self.cache_files_dir, cache_file), "rb") as f:
+            f.seek(offset)
+            return f.read(length)
 
     @trace_exceptions
     def statfs(self):
@@ -569,12 +616,13 @@ def main():
         help="run daemon under different user ID")
     svnfs.parser.add_option(mountopt="gid", dest="gid", metavar="GID",
         help="run daemon under different group ID")
+    svnfs.parser.add_option(mountopt="logfile", dest="logfile", metavar="PATH-TO-LOG-FILE",
+        help="output stdout/stderr into file")
     svnfs.parser.add_option(mountopt="send_sigstop", dest="send_sigstop", 
         action="store_true",
         help="send SIGSTOP signal when file system is initialized (useful with -f)")
-
-    svnfs.parser.add_option(mountopt="logfile", dest="logfile", metavar="PATH-TO-LOG-FILE",
-        help="output stdout/stderr into file")
+    svnfs.parser.add_option(mountopt="cache_dir", dest="cache_dir", default=os.curdir, metavar="PATH-TO-CACHE",
+        help="use file cache for retrieved Subversion objects [default: %default]")
     
     svnfs.parse(values=svnfs, errex=1)
     
@@ -602,6 +650,10 @@ def main():
             sys.exit(1)
         else:
             svnfs.repospath = os.path.abspath(svnfs.repospath)
+
+            if svnfs.cache_dir is None:
+                svnfs.cache_dir = os.curdir
+            svnfs.cache_dir = os.path.abspath(svnfs.cache_dir)
         
             # When FUSE daemonizes it changes CWD to root, do it manually.
             os.chdir("/")
@@ -627,12 +679,11 @@ def main():
             svnfs.revision = svnfs.revision.lower()
             try:
                 svnfs.revision = int(svnfs.revision)
-                
             except ValueError:
                 if svnfs.revision not in ['all', 'head']:
                     sys.stderr.write("Error: Invalid revision specification. Should be number, 'all' or 'HEAD'.\n")
                     sys.exit(1)
-
+                    
             # Open subversion repository before going to FUSE main loop, to handle obvious
             # repository access errors.
             try:
