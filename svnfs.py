@@ -155,6 +155,11 @@ def encode_node_revision_id(node_revision_id):
 
 
 class FilesCache(object):
+    # TODO: store files not in plain directory, but in equally distributed
+    # tree.
+    # TODO: touch opened files, to allow implementing external cache 
+    # cleaning.
+    
     cache_version = 1
     
     def __init__(self, cache_dir):
