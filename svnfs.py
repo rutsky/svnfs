@@ -26,6 +26,7 @@
 #          with errno is correct)
 #        - don't read whole file on first read - implement opened streams  
 #          storing and caching
+#        - create cache in /tmp by default
 #
 #  USAGE:
 #        - install and load the "fuse" kernel module 
