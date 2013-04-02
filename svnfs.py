@@ -67,6 +67,18 @@ import svn.core
 
 import synch
 
+try:
+    from functools import lru_cache
+except ImportError:
+    from repoze_lru import lru_cache
+
+# TODO: move to configuration
+getattr_lru_cache_size = 16000
+file_exists_lru_cache_size = 32000
+get_root_lru_cache_size = 16000
+revision_creation_lru_cache_size = 16000
+node_revision_id_lru_cache_size = 32000
+getdir_lru_cache_size = 8000
 
 revision_dir_re = re.compile(r"^/(\d+)$")
 file_re = re.compile(r"^/(\d+)(/.*)$")
@@ -365,9 +377,6 @@ class SvnFS(Fuse):
     
         self.fs_ptr = svn.repos.svn_repos_fs(svn.repos.svn_repos_open(svn.core.svn_path_canonicalize(self.repospath)))
         
-        # revision -> revision_root object
-        self.roots = {}
-        
         if self.revision != 'all':
             self.rev = svn.fs.youngest_rev(self.fs_ptr) if self.revision == 'head' else self.revision
             self.file_class = SvnFSSingleRevisionFile
@@ -375,9 +384,6 @@ class SvnFS(Fuse):
             self.file_class = SvnFSAllRevisionsFile
         self.file_class.svnfs = self
 
-        # revision -> time
-        self.revision_creation_time_cache = {}
-        
         self.files_cache = FilesCache(self.cache_dir)
         
     # TODO?
@@ -385,24 +391,26 @@ class SvnFS(Fuse):
     #    if not os.access("." + path, mode):
     #        return -EACCES
         
-    def __revision_creation_time_impl(self, rev):
+    @lru_cache(revision_creation_lru_cache_size)
+    def __revision_creation_time(self, rev):
         date = svn.fs.revision_prop(self.fs_ptr, rev,
             svn.core.SVN_PROP_REVISION_DATE)
         return svn.core.secs_from_timestr(date)
-
-    def __revision_creation_time(self, rev):
-        return self.revision_creation_time_cache.setdefault(rev, self.__revision_creation_time_impl(rev))
     
+    @lru_cache(get_root_lru_cache_size)
     def svnfs_get_root(self, rev):
-        return self.roots.setdefault(rev, svn.fs.revision_root(self.fs_ptr, rev))
+        return svn.fs.revision_root(self.fs_ptr, rev)
     
+    @lru_cache(file_exists_lru_cache_size)
     def svnfs_file_exists(self, rev, svn_path):
         kind = svn.fs.check_path(self.svnfs_get_root(rev), svn_path)
         return kind != svn.core.svn_node_none
     
+    @lru_cache(node_revision_id_lru_cache_size)
     def svnfs_node_revision_id(self, rev, path):
         return svn.fs.unparse_id(svn.fs.node_id(self.svnfs_get_root(rev), path))
 
+    @lru_cache(getattr_lru_cache_size)
     def svnfs_getattr(self, rev, path):
         st = fuse.Stat()
         
@@ -462,6 +470,7 @@ class SvnFS(Fuse):
 
         return st
 
+    @lru_cache(getattr_lru_cache_size)
     def __getattr_rev(self, rev):
         st = fuse.Stat()
         
@@ -509,6 +518,7 @@ class SvnFS(Fuse):
         e.errno = errno.ENOENT
         raise e
 
+    @lru_cache(getdir_lru_cache_size)
     def __get_files_list_svn(self, root, path):
         # TODO: check that directory exists first?
         return svn.fs.dir_entries(root, path).keys()
