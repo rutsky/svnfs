@@ -130,6 +130,7 @@ def is_write_mode(flags):
 class ManagedOSError(OSError):
     pass
 
+
 def raise_read_only_error(msg=None):
     if msg is not None:
         error_msg = msg
