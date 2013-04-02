@@ -257,10 +257,11 @@ class SvnFSFileBase(object):
         
         self.rev = rev
         self.path = path
+        self.node_revision_id = self.svnfs.svnfs_node_revision_id(rev, path)
         
     @trace_exceptions
     def read(self, length, offset):
-        return self.svnfs.svnfs_read(self.rev, self.path, length, offset)
+        return self.svnfs.svnfs_read(self.rev, self.path, self.node_revision_id, length, offset)
 
     @trace_exceptions
     def write(self, buf, offset):
@@ -586,9 +587,7 @@ class SvnFS(Fuse):
     def utime(self, path, times):
         return os.utime(path, times)
 
-    def svnfs_read(self, rev, path, length, offset):
-        node_revision_id = self.svnfs_node_revision_id(rev, path)
-        
+    def svnfs_read(self, rev, path, node_revision_id, length, offset):
         cache_file = self.files_cache.get_file_path(node_revision_id)
         
         if not cache_file:
