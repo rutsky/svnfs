@@ -293,6 +293,11 @@ class SvnFSFileBase(object):
     def lock(self, cmd, owner, **kw):
         return -errno.EOPNOTSUPP
 
+    def _get_rev(self, rev):
+        if rev == 'head':
+            return svn.fs.youngest_rev(self.svnfs.fs_ptr)
+        return int(rev)
+
 
 class SvnFSAllRevisionsFile(SvnFSFileBase):
     @trace_exceptions
@@ -303,7 +308,7 @@ class SvnFSAllRevisionsFile(SvnFSFileBase):
         if not m:
             raise_no_such_entry_error("Path not found: {0}".format(path))
 
-        rev = int(m.group(1))
+        rev = self._get_rev(m.group(1))
         if rev > svn.fs.youngest_rev(self.svnfs.fs_ptr):
             raise_no_such_entry_error("Nonexistent (yet) revision {0}".format(rev))
 
