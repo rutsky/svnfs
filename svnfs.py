@@ -68,8 +68,8 @@ import svn.core
 import synch
 
 
-revision_dir_re = re.compile(r"^/(\d+)$")
-file_re = re.compile(r"^/(\d+)(/.*)$")
+revision_dir_re = re.compile(r"^/(\d+|head)$")
+file_re = re.compile(r"^/(\d+|head)(/.*)$")
 
 
 def redirect_output(output_file):
@@ -488,17 +488,22 @@ class SvnFS(Fuse):
             
             m = revision_dir_re.match(path)
             if m:
-                return self.__getattr_rev(int(m.group(1)))
+                return self.__getattr_rev(self._get_rev(m.group(1)))
         
             m = file_re.match(path)
             if m:
-                return self.svnfs_getattr(int(m.group(1)), m.group(2))
+                return self.svnfs_getattr(self._get_rev(m.group(1)), m.group(2))
         else:
             return self.svnfs_getattr(self.rev, path)
         
         e = OSError("Nothing found at {0}".format(path))
         e.errno = errno.ENOENT
         raise e
+
+    def _get_rev(self, rev):
+        if rev == 'head':
+            return svn.fs.youngest_rev(self.fs_ptr)
+        return int(rev)
 
     # TODO: support this
     @trace_exceptions
@@ -519,11 +524,11 @@ class SvnFS(Fuse):
 
             m = revision_dir_re.match(path)
             if m:
-                return self.__get_files_list_svn(self.svnfs_get_root(int(m.group(1))), "/")
+                return self.__get_files_list_svn(self.svnfs_get_root(self._get_rev(m.group(1))), "/")
             
             m = file_re.match(path)
             if m:
-                return self.__get_files_list_svn(self.svnfs_get_root(int(m.group(1))), m.group(2))
+                return self.__get_files_list_svn(self.svnfs_get_root(self._get_rev(m.group(1))), m.group(2))
         else:
             return self.__get_files_list_svn(self.svnfs_get_root(self.rev), path)
 
@@ -538,6 +543,9 @@ class SvnFS(Fuse):
     @trace_exceptions
     def readdir(self, path, offset):
         # TODO: offset?
+        if path == '/':
+            yield fuse.Direntry('head')
+
         for f in  self.__get_files_list(path) + [".", ".."]:
             yield fuse.Direntry(f)
 
