@@ -188,8 +188,9 @@ class RunInThread(threading.Thread):
         while not self.ready:
             time.sleep(0.001)
 
-        # Restore handler one more time
-        signal.signal(signal.SIGCHLD, self.old_sigchld_handler)
+        if self.wait_sigstop:
+            # Restore handler one more time
+            signal.signal(signal.SIGCHLD, self.old_sigchld_handler)
         
         # to be sure, that FS is up
         #os.stat(self.mnt) # causes FUSE failures: Software caused connection abort
