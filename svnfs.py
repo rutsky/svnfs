@@ -340,7 +340,49 @@ class SvnFSSingleRevisionFile(SvnFSFileBase):
         self.svnfs_init(self.svnfs.rev, path)
 
 
-class SvnFS(Fuse):
+class FuseReadOnlyMixin(object):
+    @trace_exceptions
+    def unlink(self, path):
+        raise_read_only_error("Read-only file system, can't unlink {0}".format(path))
+
+    @trace_exceptions
+    def rmdir(self, path):
+        raise_read_only_error("Read-only file system, can't rmdir {0}".format(path))
+
+    @trace_exceptions
+    def symlink(self, path, path1):
+        raise_read_only_error("Read-only file system, can't symlink {0}".format(path))
+
+    @trace_exceptions
+    def rename(self, path, path1):
+        raise_read_only_error("Read-only file system, can't rename {0}".format(path))
+
+    @trace_exceptions
+    def link(self, path, path1):
+        raise_read_only_error("Read-only file system, can't link {0}".format(path))
+
+    @trace_exceptions
+    def chmod(self, path, mode):
+        raise_read_only_error("Read-only file system, can't chmod {0}".format(path))
+
+    @trace_exceptions
+    def chown(self, path, user, group):
+        raise_read_only_error("Read-only file system, can't chown {0}".format(path))
+
+    @trace_exceptions
+    def truncate(self, path, size):
+        raise_read_only_error("Read-only file system, can't truncate {0}".format(path))
+
+    @trace_exceptions
+    def mknod(self, path, mode, dev):
+        raise_read_only_error("Read-only view, can't mknod {0}".format(path))
+
+    @trace_exceptions
+    def mkdir(self, path, mode):
+        raise_read_only_error("Read-only view, can't mkdir {0}".format(path))
+
+
+class SvnFS(Fuse, FuseReadOnlyMixin):
     def __init__(self, *args, **kw):
         Fuse.__init__(self, *args, **kw)
         
@@ -552,46 +594,6 @@ class SvnFS(Fuse):
         # TODO: offset?
         for f in  self.__get_files_list(path) + [".", ".."]:
             yield fuse.Direntry(f)
-
-    @trace_exceptions
-    def unlink(self, path):
-        raise_read_only_error("Read-only file system, can't unlink {0}".format(path))
-
-    @trace_exceptions
-    def rmdir(self, path):
-        raise_read_only_error("Read-only file system, can't rmdir {0}".format(path))
-        
-    @trace_exceptions
-    def symlink(self, path, path1):
-        raise_read_only_error("Read-only file system, can't symlink {0}".format(path))
-        
-    @trace_exceptions
-    def rename(self, path, path1):
-        raise_read_only_error("Read-only file system, can't rename {0}".format(path))
-
-    @trace_exceptions
-    def link(self, path, path1):
-        raise_read_only_error("Read-only file system, can't link {0}".format(path))
-
-    @trace_exceptions
-    def chmod(self, path, mode):
-        raise_read_only_error("Read-only file system, can't chmod {0}".format(path))
-
-    @trace_exceptions
-    def chown(self, path, user, group):
-        raise_read_only_error("Read-only file system, can't chown {0}".format(path))
-
-    @trace_exceptions
-    def truncate(self, path, size):
-        raise_read_only_error("Read-only file system, can't truncate {0}".format(path))
-
-    @trace_exceptions
-    def mknod(self, path, mode, dev):
-        raise_read_only_error("Read-only view, can't mknod {0}".format(path))
-
-    @trace_exceptions
-    def mkdir(self, path, mode):
-        raise_read_only_error("Read-only view, can't mkdir {0}".format(path))
 
     @trace_exceptions
     def utime(self, path, times):
