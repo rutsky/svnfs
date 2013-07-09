@@ -19,7 +19,6 @@ import svn
 import svn.fs
 import svn.repos
 
-# TODO: deadlock: while true; do python -u -m unittest -v test_svnfs; sleep 1; done
 # TODO: test simultaneous read of big file from many threads
 
 test_repo = "test_repo"
@@ -143,8 +142,12 @@ class RunInThread(threading.Thread):
         self.err = None
         self.out = None
         self.returncode = None
-        
-        self.ready = threading.Event()
+
+        # This variable tested and modified in different threads and I rely
+        # on Python's GIL here.  I don't use locking primitives, because main
+        # thread can lock them and be interrupted by signal, where it will try
+        # to lock them again and deadlock will occur.
+        self.ready = False
         
     def _sigchld_handler(self, signum, frame):
         try:
@@ -156,7 +159,7 @@ class RunInThread(threading.Thread):
                 # it's return code or output.
                 pass
         finally:
-            self.ready.set()
+            self.ready = True
     
     def run(self):
         try:
@@ -164,14 +167,14 @@ class RunInThread(threading.Thread):
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except:
             # Set thread as ready to prevent deadlock
-            self.ready.set()
+            self.ready = True
             raise
             
         if self.wait_sigstop:
             self.err, self.out = self.process.communicate()
             # ready.set() should be called from SIGCHLD handler
         else:
-            self.ready.set()
+            self.ready = True
             self.err, self.out = self.process.communicate()
         
         self.returncode = self.process.returncode
@@ -182,11 +185,12 @@ class RunInThread(threading.Thread):
         
         super(RunInThread, self).start()
         
-        while not self.ready.wait(0.001):
-            pass
+        while not self.ready:
+            time.sleep(0.001)
 
-        # Restore handler one more time
-        signal.signal(signal.SIGCHLD, self.old_sigchld_handler)
+        if self.wait_sigstop:
+            # Restore handler one more time
+            signal.signal(signal.SIGCHLD, self.old_sigchld_handler)
         
         # to be sure, that FS is up
         #os.stat(self.mnt) # causes FUSE failures: Software caused connection abort

@@ -67,6 +67,18 @@ import svn.core
 
 import synch
 
+try:
+    from functools import lru_cache
+except ImportError:
+    from repoze_lru import lru_cache
+
+# TODO: move to configuration
+getattr_lru_cache_size = 16000
+file_exists_lru_cache_size = 32000
+get_root_lru_cache_size = 16000
+revision_creation_lru_cache_size = 16000
+node_revision_id_lru_cache_size = 32000
+getdir_lru_cache_size = 8000
 
 revision_dir_re = re.compile(r"^/(\d+|head)$")
 file_re = re.compile(r"^/(\d+|head)(/.*)$")
@@ -129,6 +141,7 @@ def is_write_mode(flags):
 
 class ManagedOSError(OSError):
     pass
+
 
 def raise_read_only_error(msg=None):
     if msg is not None:
@@ -256,10 +269,11 @@ class SvnFSFileBase(object):
         
         self.rev = rev
         self.path = path
+        self.node_revision_id = self.svnfs.svnfs_node_revision_id(rev, path)
         
     @trace_exceptions
     def read(self, length, offset):
-        return self.svnfs.svnfs_read(self.rev, self.path, length, offset)
+        return self.svnfs.svnfs_read(self.rev, self.path, self.node_revision_id, length, offset)
 
     @trace_exceptions
     def write(self, buf, offset):
@@ -331,7 +345,49 @@ class SvnFSSingleRevisionFile(SvnFSFileBase):
         self.svnfs_init(self.svnfs.rev, path)
 
 
-class SvnFS(Fuse):
+class FuseReadOnlyMixin(object):
+    @trace_exceptions
+    def unlink(self, path):
+        raise_read_only_error("Read-only file system, can't unlink {0}".format(path))
+
+    @trace_exceptions
+    def rmdir(self, path):
+        raise_read_only_error("Read-only file system, can't rmdir {0}".format(path))
+
+    @trace_exceptions
+    def symlink(self, path, path1):
+        raise_read_only_error("Read-only file system, can't symlink {0}".format(path))
+
+    @trace_exceptions
+    def rename(self, path, path1):
+        raise_read_only_error("Read-only file system, can't rename {0}".format(path))
+
+    @trace_exceptions
+    def link(self, path, path1):
+        raise_read_only_error("Read-only file system, can't link {0}".format(path))
+
+    @trace_exceptions
+    def chmod(self, path, mode):
+        raise_read_only_error("Read-only file system, can't chmod {0}".format(path))
+
+    @trace_exceptions
+    def chown(self, path, user, group):
+        raise_read_only_error("Read-only file system, can't chown {0}".format(path))
+
+    @trace_exceptions
+    def truncate(self, path, size):
+        raise_read_only_error("Read-only file system, can't truncate {0}".format(path))
+
+    @trace_exceptions
+    def mknod(self, path, mode, dev):
+        raise_read_only_error("Read-only view, can't mknod {0}".format(path))
+
+    @trace_exceptions
+    def mkdir(self, path, mode):
+        raise_read_only_error("Read-only view, can't mkdir {0}".format(path))
+
+
+class SvnFS(Fuse, FuseReadOnlyMixin):
     def __init__(self, *args, **kw):
         Fuse.__init__(self, *args, **kw)
         
@@ -368,9 +424,6 @@ class SvnFS(Fuse):
     
         self.fs_ptr = svn.repos.svn_repos_fs(svn.repos.svn_repos_open(svn.core.svn_path_canonicalize(self.repospath)))
         
-        # revision -> revision_root object
-        self.roots = {}
-        
         if self.revision != 'all':
             self.rev = svn.fs.youngest_rev(self.fs_ptr) if self.revision == 'head' else self.revision
             self.file_class = SvnFSSingleRevisionFile
@@ -378,9 +431,6 @@ class SvnFS(Fuse):
             self.file_class = SvnFSAllRevisionsFile
         self.file_class.svnfs = self
 
-        # revision -> time
-        self.revision_creation_time_cache = {}
-        
         self.files_cache = FilesCache(self.cache_dir)
         
     # TODO?
@@ -388,24 +438,26 @@ class SvnFS(Fuse):
     #    if not os.access("." + path, mode):
     #        return -EACCES
         
-    def __revision_creation_time_impl(self, rev):
+    @lru_cache(revision_creation_lru_cache_size)
+    def __revision_creation_time(self, rev):
         date = svn.fs.revision_prop(self.fs_ptr, rev,
             svn.core.SVN_PROP_REVISION_DATE)
         return svn.core.secs_from_timestr(date)
-
-    def __revision_creation_time(self, rev):
-        return self.revision_creation_time_cache.setdefault(rev, self.__revision_creation_time_impl(rev))
     
+    @lru_cache(get_root_lru_cache_size)
     def svnfs_get_root(self, rev):
-        return self.roots.setdefault(rev, svn.fs.revision_root(self.fs_ptr, rev))
+        return svn.fs.revision_root(self.fs_ptr, rev)
     
+    @lru_cache(file_exists_lru_cache_size)
     def svnfs_file_exists(self, rev, svn_path):
         kind = svn.fs.check_path(self.svnfs_get_root(rev), svn_path)
         return kind != svn.core.svn_node_none
     
+    @lru_cache(node_revision_id_lru_cache_size)
     def svnfs_node_revision_id(self, rev, path):
         return svn.fs.unparse_id(svn.fs.node_id(self.svnfs_get_root(rev), path))
 
+    @lru_cache(getattr_lru_cache_size)
     def svnfs_getattr(self, rev, path):
         st = fuse.Stat()
         
@@ -465,6 +517,7 @@ class SvnFS(Fuse):
 
         return st
 
+    @lru_cache(getattr_lru_cache_size)
     def __getattr_rev(self, rev):
         st = fuse.Stat()
         
@@ -517,6 +570,7 @@ class SvnFS(Fuse):
         e.errno = errno.ENOENT
         raise e
 
+    @lru_cache(getdir_lru_cache_size)
     def __get_files_list_svn(self, root, path):
         # TODO: check that directory exists first?
         return svn.fs.dir_entries(root, path).keys()
@@ -555,52 +609,10 @@ class SvnFS(Fuse):
             yield fuse.Direntry(f)
 
     @trace_exceptions
-    def unlink(self, path):
-        raise_read_only_error("Read-only file system, can't unlink {0}".format(path))
-
-    @trace_exceptions
-    def rmdir(self, path):
-        raise_read_only_error("Read-only file system, can't rmdir {0}".format(path))
-        
-    @trace_exceptions
-    def symlink(self, path, path1):
-        raise_read_only_error("Read-only file system, can't symlink {0}".format(path))
-        
-    @trace_exceptions
-    def rename(self, path, path1):
-        raise_read_only_error("Read-only file system, can't rename {0}".format(path))
-
-    @trace_exceptions
-    def link(self, path, path1):
-        raise_read_only_error("Read-only file system, can't link {0}".format(path))
-
-    @trace_exceptions
-    def chmod(self, path, mode):
-        raise_read_only_error("Read-only file system, can't chmod {0}".format(path))
-
-    @trace_exceptions
-    def chown(self, path, user, group):
-        raise_read_only_error("Read-only file system, can't chown {0}".format(path))
-
-    @trace_exceptions
-    def truncate(self, path, size):
-        raise_read_only_error("Read-only file system, can't truncate {0}".format(path))
-
-    @trace_exceptions
-    def mknod(self, path, mode, dev):
-        raise_read_only_error("Read-only view, can't mknod {0}".format(path))
-
-    @trace_exceptions
-    def mkdir(self, path, mode):
-        raise_read_only_error("Read-only view, can't mkdir {0}".format(path))
-
-    @trace_exceptions
     def utime(self, path, times):
         return os.utime(path, times)
 
-    def svnfs_read(self, rev, path, length, offset):
-        node_revision_id = self.svnfs_node_revision_id(rev, path)
-        
+    def svnfs_read(self, rev, path, node_revision_id, length, offset):
         cache_file = self.files_cache.get_file_path(node_revision_id)
         
         if not cache_file:
