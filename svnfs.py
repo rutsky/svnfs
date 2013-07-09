@@ -72,13 +72,7 @@ try:
 except ImportError:
     from repoze_lru import lru_cache
 
-# TODO: move to configuration
-getattr_lru_cache_size = 16000
-file_exists_lru_cache_size = 32000
-get_root_lru_cache_size = 16000
-revision_creation_lru_cache_size = 16000
-node_revision_id_lru_cache_size = 32000
-getdir_lru_cache_size = 8000
+# TODO: Cache immutable values, such as getattr. 
 
 revision_dir_re = re.compile(r"^/(\d+|head)$")
 file_re = re.compile(r"^/(\d+|head)(/.*)$")
@@ -264,16 +258,17 @@ class SvnFSFileBase(object):
         if is_write_mode(flags):
             raise_read_only_error("Read-only file system. Can't create '{0}'".format(path))
 
-    def svnfs_init(self, rev, path):
+    def svnfs_init(self, rev, path, pool):
         # Revision and path in revision must exists
 
         self.rev = rev
         self.path = path
-        self.node_revision_id = self.svnfs.svnfs_node_revision_id(rev, path)
+        self.node_revision_id = self.svnfs.svnfs_node_revision_id(rev, path, pool)
 
     @trace_exceptions
     def read(self, length, offset):
-        return self.svnfs.svnfs_read(self.rev, self.path, self.node_revision_id, length, offset)
+        pool = svn.core.Pool(get_pool())
+        return self.svnfs.svnfs_read(self.rev, self.path, self.node_revision_id, length, offset, pool)
 
     @trace_exceptions
     def write(self, buf, offset):
@@ -297,7 +292,8 @@ class SvnFSFileBase(object):
 
     @trace_exceptions
     def fgetattr(self):
-        return self.svnfs.svnfs_getattr(self.rev, self.path)
+        pool = svn.core.Pool(get_pool())
+        return self.svnfs.svnfs_getattr(self.rev, self.path, pool)
 
     @trace_exceptions
     def ftruncate(self, length):
@@ -306,11 +302,6 @@ class SvnFSFileBase(object):
     @trace_exceptions
     def lock(self, cmd, owner, **kw):
         return -errno.EOPNOTSUPP
-
-    def _get_rev(self, rev):
-        if rev == 'head':
-            return svn.fs.youngest_rev(self.svnfs.fs_ptr)
-        return int(rev)
 
 
 class SvnFSAllRevisionsFile(SvnFSFileBase):
@@ -322,16 +313,17 @@ class SvnFSAllRevisionsFile(SvnFSFileBase):
         if not m:
             raise_no_such_entry_error("Path not found: {0}".format(path))
 
-        rev = self._get_rev(m.group(1))
-        if rev > svn.fs.youngest_rev(self.svnfs.fs_ptr):
+        pool = svn.core.Pool(get_pool())
+        rev = self.svnfs.svnfs_get_rev(m.group(1), pool)
+        if rev > svn.fs.youngest_rev(self.svnfs.fs_ptr, pool):
             raise_no_such_entry_error("Nonexistent (yet) revision {0}".format(rev))
 
         svn_path = m.group(2)
 
-        if not self.svnfs.svnfs_file_exists(rev, svn_path):
+        if not self.svnfs.svnfs_file_exists(rev, svn_path, pool):
             raise_no_such_entry_error("Path not found in {0} revision: {1}".format(rev, svn_path))
 
-        self.svnfs_init(rev, svn_path)
+        self.svnfs_init(rev, svn_path, pool)
 
 
 class SvnFSSingleRevisionFile(SvnFSFileBase):
@@ -339,10 +331,12 @@ class SvnFSSingleRevisionFile(SvnFSFileBase):
     def __init__(self, path, flags, *mode):
         super(SvnFSSingleRevisionFile, self).__init__(path, flags, *mode)
 
-        if not self.svnfs.svnfs_file_exists(self.svnfs.rev, path):
+        pool = svn.core.Pool(get_pool())
+
+        if not self.svnfs.svnfs_file_exists(self.svnfs.rev, path, pool):
             raise_no_such_entry_error("Path not found in {0} revision: {1}".format(self.svnfs.rev, path))
 
-        self.svnfs_init(self.svnfs.rev, path)
+        self.svnfs_init(self.svnfs.rev, path, pool)
 
 
 class FuseReadOnlyMixin(object):
@@ -387,6 +381,17 @@ class FuseReadOnlyMixin(object):
         raise_read_only_error("Read-only view, can't mkdir {0}".format(path))
 
 
+_pools = {}
+def get_pool():
+    global _pools
+
+    ident = threading.current_thread().ident
+    if ident not in _pools:
+        _pools[ident] = svn.core.Pool()
+
+    return _pools[ident]
+
+
 class SvnFS(Fuse, FuseReadOnlyMixin):
     def __init__(self, *args, **kw):
         Fuse.__init__(self, *args, **kw)
@@ -420,12 +425,19 @@ class SvnFS(Fuse, FuseReadOnlyMixin):
                 os.kill(os.getpid(), signal.SIGSTOP)
 
     def init_repo(self):
+        # Called from main thread before daemonizing.
         assert self.repospath is not None
 
-        self.fs_ptr = svn.repos.svn_repos_fs(svn.repos.svn_repos_open(svn.core.svn_path_canonicalize(self.repospath)))
+        pool = get_pool()
+        fs_ptr = svn.repos.svn_repos_fs(
+            svn.repos.svn_repos_open(
+                svn.core.svn_path_canonicalize(self.repospath, pool), pool))
 
         if self.revision != 'all':
-            self.rev = svn.fs.youngest_rev(self.fs_ptr) if self.revision == 'head' else self.revision
+            if self.revision == 'head':
+                self.rev = svn.fs.youngest_rev(fs_ptr, pool)
+            else:
+                self.rev = self.revision
             self.file_class = SvnFSSingleRevisionFile
         else:
             self.file_class = SvnFSAllRevisionsFile
@@ -433,44 +445,60 @@ class SvnFS(Fuse, FuseReadOnlyMixin):
 
         self.files_cache = FilesCache(self.cache_dir)
 
+        self.fs_ptrs = {}
+
+    def __get_fs_ptr(self):
+        # Use thread pool.
+        # TODO: Leaks a bit of memory with every thread.
+        pool = get_pool()
+        return svn.repos.svn_repos_fs(
+            svn.repos.svn_repos_open(
+                svn.core.svn_path_canonicalize(self.repospath, pool), pool))
+
+    @property
+    def fs_ptr(self):
+        ident = threading.current_thread().ident
+        if ident not in self.fs_ptrs:
+            self.fs_ptrs[ident] = self.__get_fs_ptr()
+
+        return self.fs_ptrs[ident]
+
     # TODO?
     #def access(self, path, mode):
     #    if not os.access("." + path, mode):
     #        return -EACCES
 
-    @lru_cache(revision_creation_lru_cache_size)
-    def __revision_creation_time(self, rev):
+    def __revision_creation_time(self, rev, pool):
         date = svn.fs.revision_prop(self.fs_ptr, rev,
-            svn.core.SVN_PROP_REVISION_DATE)
-        return svn.core.secs_from_timestr(date)
+            svn.core.SVN_PROP_REVISION_DATE, pool)
+        return svn.core.secs_from_timestr(date, pool)
 
-    @lru_cache(get_root_lru_cache_size)
-    def svnfs_get_root(self, rev):
-        return svn.fs.revision_root(self.fs_ptr, rev)
+    def svnfs_get_root(self, rev, pool):
+        return svn.fs.revision_root(self.fs_ptr, rev, pool)
 
-    @lru_cache(file_exists_lru_cache_size)
-    def svnfs_file_exists(self, rev, svn_path):
-        kind = svn.fs.check_path(self.svnfs_get_root(rev), svn_path)
+    def svnfs_file_exists(self, rev, svn_path, pool):
+        root = self.svnfs_get_root(rev, pool)
+        kind = svn.fs.check_path(root, svn_path, pool)
         return kind != svn.core.svn_node_none
 
-    @lru_cache(node_revision_id_lru_cache_size)
-    def svnfs_node_revision_id(self, rev, path):
-        return svn.fs.unparse_id(svn.fs.node_id(self.svnfs_get_root(rev), path))
+    def svnfs_node_revision_id(self, rev, path, pool):
+        root = self.svnfs_get_root(rev, pool)
+        node_id = svn.fs.node_id(root, path, pool)
+        return svn.fs.unparse_id(node_id, pool)
 
-    @lru_cache(getattr_lru_cache_size)
-    def svnfs_getattr(self, rev, path):
+    def svnfs_getattr(self, rev, path, pool):
         st = fuse.Stat()
 
-        root = self.svnfs_get_root(rev)
+        root = self.svnfs_get_root(rev, pool)
 
-        kind = svn.fs.check_path(root, path)
+        kind = svn.fs.check_path(root, path, pool)
         if kind == svn.core.svn_node_none:
             e = OSError("Nothing found at {0}".format(path))
             e.errno = errno.ENOENT
             raise e
 
         # TODO: CRC of some id?
-        st.st_ino = svn.fs.unparse_id(svn.fs.node_id(root, path))
+        st.st_ino = svn.fs.unparse_id(svn.fs.node_id(root, path, pool), pool)
         st.st_ino = abs(binascii.crc32(st.st_ino))
 
         st.st_size = 0
@@ -479,8 +507,8 @@ class SvnFS(Fuse, FuseReadOnlyMixin):
         st.st_uid = 0
         st.st_gid = 0
 
-        created_rev = svn.fs.node_created_rev(root, path)
-        time = self.__revision_creation_time(created_rev)
+        created_rev = svn.fs.node_created_rev(root, path, pool)
+        time = self.__revision_creation_time(created_rev, pool)
         st.st_mtime = time
         st.st_ctime = time
         st.st_atime = time
@@ -490,14 +518,14 @@ class SvnFS(Fuse, FuseReadOnlyMixin):
             st.st_size = 512
         else:
             st.st_mode = stat.S_IFREG | 0o444
-            st.st_size = svn.fs.file_length(root, path)
+            st.st_size = svn.fs.file_length(root, path, pool)
 
         return st
 
-    def __getattr_root(self):
+    def __getattr_root(self, pool):
         st = fuse.Stat()
 
-        rev = svn.fs.youngest_rev(self.fs_ptr)
+        rev = svn.fs.youngest_rev(self.fs_ptr, pool)
 
         st.st_ino = 0
 
@@ -507,7 +535,7 @@ class SvnFS(Fuse, FuseReadOnlyMixin):
         st.st_uid = 0
         st.st_gid = 0
 
-        time = self.__revision_creation_time(rev)
+        time = self.__revision_creation_time(rev, pool)
         st.st_mtime = time
         st.st_ctime = time
         st.st_atime = time
@@ -517,8 +545,7 @@ class SvnFS(Fuse, FuseReadOnlyMixin):
 
         return st
 
-    @lru_cache(getattr_lru_cache_size)
-    def __getattr_rev(self, rev):
+    def __getattr_rev(self, rev, pool):
         st = fuse.Stat()
 
         st.st_ino = 0
@@ -529,7 +556,7 @@ class SvnFS(Fuse, FuseReadOnlyMixin):
         st.st_uid = 0
         st.st_gid = 0
 
-        time = self.__revision_creation_time(rev)
+        time = self.__revision_creation_time(rev, pool)
         st.st_mtime = time
         st.st_ctime = time
         st.st_atime = time
@@ -540,27 +567,31 @@ class SvnFS(Fuse, FuseReadOnlyMixin):
         return st
 
     def getattr(self, path):
+        pool = svn.core.Pool(get_pool())
         if self.revision == 'all':
             if path == "/":
-                return self.__getattr_root()
+                return self.__getattr_root(pool)
 
             m = revision_dir_re.match(path)
             if m:
-                return self.__getattr_rev(self._get_rev(m.group(1)))
+                rev = self.svnfs_get_rev(m.group(1), pool)
+                return self.__getattr_rev(rev, pool)
 
             m = file_re.match(path)
             if m:
-                return self.svnfs_getattr(self._get_rev(m.group(1)), m.group(2))
+                rev = self.svnfs_get_rev(m.group(1), pool)
+                svn_path = m.group(2)
+                return self.svnfs_getattr(rev, svn_path, pool)
         else:
-            return self.svnfs_getattr(self.rev, path)
+            return self.svnfs_getattr(self.rev, path, pool)
 
         e = OSError("Nothing found at {0}".format(path))
         e.errno = errno.ENOENT
         raise e
 
-    def _get_rev(self, rev):
+    def svnfs_get_rev(self, rev, pool):
         if rev == 'head':
-            return svn.fs.youngest_rev(self.fs_ptr)
+            return svn.fs.youngest_rev(self.fs_ptr, pool)
         return int(rev)
 
     # TODO: support this
@@ -570,26 +601,31 @@ class SvnFS(Fuse, FuseReadOnlyMixin):
         e.errno = errno.ENOENT
         raise e
 
-    @lru_cache(getdir_lru_cache_size)
-    def __get_files_list_svn(self, root, path):
+    def __get_files_list_svn(self, root, path, pool):
         # TODO: check that directory exists first?
-        return svn.fs.dir_entries(root, path).keys()
+        return svn.fs.dir_entries(root, path, pool).keys()
 
-    def __get_files_list(self, path):
+    def __get_files_list(self, path, pool):
         if self.revision == 'all':
             if path == "/":
-                rev = svn.fs.youngest_rev(self.fs_ptr)
+                rev = svn.fs.youngest_rev(self.fs_ptr, pool)
                 return map(str, range(1, rev + 1))
 
             m = revision_dir_re.match(path)
             if m:
-                return self.__get_files_list_svn(self.svnfs_get_root(self._get_rev(m.group(1))), "/")
+                rev = self.svnfs_get_rev(m.group(1), pool)
+                root = self.svnfs_get_root(rev, pool)
+                return self.__get_files_list_svn(root, "/", pool)
 
             m = file_re.match(path)
             if m:
-                return self.__get_files_list_svn(self.svnfs_get_root(self._get_rev(m.group(1))), m.group(2))
+                rev = self.svnfs_get_rev(m.group(1), pool)
+                path = m.group(2)
+                root = self.svnfs_get_root(rev, pool)
+                return self.__get_files_list_svn(root, path, pool)
         else:
-            return self.__get_files_list_svn(self.svnfs_get_root(self.rev), path)
+            root = self.svnfs_get_root(self.rev, pool)
+            return self.__get_files_list_svn(root, path, pool)
 
         e = OSError("Nothing found at {0}".format(path))
         e.errno = errno.ENOENT
@@ -597,27 +633,31 @@ class SvnFS(Fuse, FuseReadOnlyMixin):
 
     @trace_exceptions
     def getdir(self, path):
-        return map(lambda x: (x, 0), self.__get_files_list(path))
+        pool = svn.core.Pool(get_pool())
+        return map(lambda x: (x, 0), self.__get_files_list(path, pool))
 
     @trace_exceptions
     def readdir(self, path, offset):
         # TODO: offset?
+
+        pool = svn.core.Pool(get_pool())
+
         if path == '/':
             yield fuse.Direntry('head')
 
-        for f in  self.__get_files_list(path) + [".", ".."]:
+        for f in  self.__get_files_list(path, pool) + [".", ".."]:
             yield fuse.Direntry(f)
 
     @trace_exceptions
     def utime(self, path, times):
         return os.utime(path, times)
 
-    def svnfs_read(self, rev, path, node_revision_id, length, offset):
+    def svnfs_read(self, rev, path, node_revision_id, length, offset, pool):
         cache_file = self.files_cache.get_file_path(node_revision_id)
 
         if not cache_file:
             # File not cached - get it and cache it
-            src_stream = svn.fs.file_contents(self.svnfs_get_root(rev), path)
+            src_stream = svn.fs.file_contents(self.svnfs_get_root(rev, pool), path, pool)
             with tempfile.NamedTemporaryFile(dir=self.files_cache.cache_temp_dir, delete=False) as destf:
                 temp_file_name = destf.name
 
