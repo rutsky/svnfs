@@ -435,7 +435,9 @@ class SvnFS(Fuse, FuseReadOnlyMixin):
         assert self.repospath is not None
 
         pool = get_pool()
-        fs_ptr = svn.repos.svn_repos_fs(
+
+        # Try to open repository
+        svn.repos.svn_repos_fs(
             svn.repos.svn_repos_open(
                 svn.core.svn_path_canonicalize(self.repospath, pool), pool))
 
