@@ -14,7 +14,8 @@
 #
 #  TODO: - support symlinks
 #        - support following HEAD as it moves, or pegging to a revision
-#          (right now, we're pegged to youngest_rev when we start)
+#          (right now, we're pegged to youngest_rev when we start) --- in all
+#          revisions mode head following implemented.
 #        - support some kind of "magic" meta syntax, i.e. "cat trunk@@log", a-la
 #          clearcase MVFS
 #        - mount arbitary sub-trees within the repository
