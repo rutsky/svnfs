@@ -298,7 +298,6 @@ class SvnFSFileBase(object):
 
     @trace_exceptions
     def fgetattr(self):
-        pool = svn.core.Pool(get_pool())
         return self.svnfs.svnfs_getattr(self.rev, self.path)
 
     @trace_exceptions
