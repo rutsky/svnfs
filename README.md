@@ -67,7 +67,10 @@ alternatives (also they don't require direct access to raw repository files):
 License
 -------
 
-svnfs distributed under terms of GNU General Public License v3.
+svnfs is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
 Copyright (C) 2001  Jeff Epler  <jepler@unpythonic.dhs.org>
 
